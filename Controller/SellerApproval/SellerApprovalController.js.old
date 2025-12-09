@@ -1,0 +1,230 @@
+const db = require('../../Config/db'); // reels-ipshopy database
+const dbSagar = require('../../Config/db_sagar'); // sagar database (oc_vendor table)
+
+// Get all pending seller approvals
+const GetPendingApprovals = async (req, res) => {
+    try {
+        // First, create the seller_approvals table if it doesn't exist
+        const createTableQuery = `
+            CREATE TABLE IF NOT EXISTS seller_approvals (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                vendor_id INT NOT NULL,
+                email VARCHAR(255) NOT NULL,
+                mobile VARCHAR(20),
+                status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_status (status),
+                INDEX idx_email (email)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        `;
+
+        db.query(createTableQuery, (createErr) => {
+            if (createErr && createErr.code !== 'ER_TABLE_EXISTS_ERROR') {
+                console.error('Error creating seller_approvals table:', createErr);
+            }
+
+            // Get pending sellers from oc_vendor table
+            const query = `
+                SELECT 
+                    vendor_id,
+                    email,
+                    telephone as mobile,
+                    display_name,
+                    firstname,
+                    lastname,
+                    date_added,
+                    approved,
+                    status
+                FROM oc_vendor 
+                WHERE approved = 0
+                ORDER BY date_added DESC
+            `;
+
+            dbSagar.query(query, (err, results) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Database error occurred'
+                    });
+                }
+
+                res.json({
+                    success: true,
+                    data: results
+                });
+            });
+        });
+    } catch (error) {
+        console.error('GetPendingApprovals error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// Approve a seller
+const ApproveSeller = async (req, res) => {
+    try {
+        const { vendorId } = req.body;
+
+        if (!vendorId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Vendor ID is required'
+            });
+        }
+
+        // Update oc_vendor table to set approved = 1
+        const updateQuery = 'UPDATE oc_vendor SET approved = 1, status = 1, date_modified = CURDATE() WHERE vendor_id = ?';
+        
+        dbSagar.query(updateQuery, [vendorId], (err, result) => {
+            if (err) {
+                console.error('Database error:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Database error occurred'
+                });
+            }
+
+            if (result.affectedRows === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Seller not found'
+                });
+            }
+
+            // Update approval record in reels-ipshopy database
+            const getVendorQuery = 'SELECT email FROM oc_vendor WHERE vendor_id = ?';
+            dbSagar.query(getVendorQuery, [vendorId], (getErr, vendorResults) => {
+                if (!getErr && vendorResults.length > 0) {
+                    const email = vendorResults[0].email;
+                    
+                    // Update or insert approval record
+                    const approvalQuery = `
+                        INSERT INTO seller_approvals (vendor_id, email, status, created_at, updated_at)
+                        VALUES (?, ?, 'approved', NOW(), NOW())
+                        ON DUPLICATE KEY UPDATE status = 'approved', updated_at = NOW()
+                    `;
+                    
+                    db.query(approvalQuery, [vendorId, email], (approvalErr) => {
+                        if (approvalErr) {
+                            console.error('Approval record update error:', approvalErr);
+                        }
+                    });
+                }
+            });
+
+            res.json({
+                success: true,
+                message: 'Seller approved successfully'
+            });
+        });
+    } catch (error) {
+        console.error('ApproveSeller error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// Reject a seller
+const RejectSeller = async (req, res) => {
+    try {
+        const { vendorId } = req.body;
+
+        if (!vendorId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Vendor ID is required'
+            });
+        }
+
+        // Update approval record in reels-ipshopy database
+        const getVendorQuery = 'SELECT email FROM oc_vendor WHERE vendor_id = ?';
+        dbSagar.query(getVendorQuery, [vendorId], (getErr, vendorResults) => {
+            if (!getErr && vendorResults.length > 0) {
+                const email = vendorResults[0].email;
+                
+                // Update approval record
+                const approvalQuery = `
+                    INSERT INTO seller_approvals (vendor_id, email, status, created_at, updated_at)
+                    VALUES (?, ?, 'rejected', NOW(), NOW())
+                    ON DUPLICATE KEY UPDATE status = 'rejected', updated_at = NOW()
+                `;
+                
+                db.query(approvalQuery, [vendorId, email], (approvalErr) => {
+                    if (approvalErr) {
+                        console.error('Approval record update error:', approvalErr);
+                    }
+                });
+            }
+        });
+
+        // Optionally delete the vendor record or mark as rejected
+        // For now, we'll just update the approval status
+        res.json({
+            success: true,
+            message: 'Seller rejected successfully'
+        });
+    } catch (error) {
+        console.error('RejectSeller error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// Get all approved sellers
+const GetApprovedSellers = async (req, res) => {
+    try {
+        const query = `
+            SELECT 
+                vendor_id,
+                email,
+                telephone as mobile,
+                display_name,
+                firstname,
+                lastname,
+                date_added,
+                approved,
+                status
+            FROM oc_vendor 
+            WHERE approved = 1
+            ORDER BY date_added DESC
+        `;
+
+        dbSagar.query(query, (err, results) => {
+            if (err) {
+                console.error('Database error:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Database error occurred'
+                });
+            }
+
+            res.json({
+                success: true,
+                data: results
+            });
+        });
+    } catch (error) {
+        console.error('GetApprovedSellers error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+module.exports = {
+    GetPendingApprovals,
+    ApproveSeller,
+    RejectSeller,
+    GetApprovedSellers
+};
+
