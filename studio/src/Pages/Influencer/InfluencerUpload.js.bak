@@ -1,0 +1,1057 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { toast } from 'react-toastify';
+import ApiService from '../../Services/ApiService';
+
+export default function InfluencerUpload() {
+    const navigate = useNavigate();
+    const { id } = useParams(); // Get the reel ID from the route parameter
+    const [uploadData, setUploadData] = useState({
+        title: '',
+        description: '',
+        category: '',
+        video: null,
+        thumbnail: null,
+        selectedProducts: [],
+        productSearch: ''
+    });
+    const [loading, setLoading] = useState(false);
+    const [categories, setCategories] = useState([]);
+    const [allProducts, setAllProducts] = useState([]);
+    const [reels, setReels] = useState([]);
+    const [showUploadForm, setShowUploadForm] = useState(false);
+    const [editingReelId, setEditingReelId] = useState(null);
+
+    useEffect(() => {
+        console.log('Component mounted, initializing data loading...');
+        
+        // Load initial data
+        loadCategories();
+        loadAllProducts();
+        loadReels();
+        
+        // Handle route changes
+        if (id) {
+            // We're editing a reel
+            setEditingReelId(id);
+            setShowUploadForm(true);
+            loadReelForEdit(id);
+        } else {
+            // We're on the upload page (not editing) - show list by default
+            setEditingReelId(null);
+            setShowUploadForm(false);
+            // Reset form data only if we were previously editing
+            if (editingReelId) {
+                resetForm();
+            }
+        }
+    }, [id]);
+    
+    // Initialize Lucide icons after render
+    useEffect(() => {
+        // Initialize Lucide icons
+        if (window.lucide) {
+            window.lucide.createIcons();
+        }
+        
+        // Re-initialize icons when reels data changes
+        const timer = setTimeout(() => {
+            if (window.lucide) {
+                window.lucide.createIcons();
+            }
+        }, 100);
+        
+        return () => clearTimeout(timer);
+    }, [reels, showUploadForm]);
+
+    const loadCategories = async () => {
+        try {
+            console.log('Loading categories...');
+            setLoading(true);
+            const response = await ApiService.getCategories();
+            console.log('Categories response:', response);
+            if (response.success) {
+                setCategories(response.data);
+                console.log('Categories loaded:', response.data);
+            } else {
+                toast.error('Failed to load categories: ' + response.message);
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading categories:', error);
+            toast.error('Failed to load categories: ' + error.message);
+            setLoading(false);
+        }
+    };
+
+    const loadAllProducts = async () => {
+        try {
+            console.log('Loading all products...');
+            setLoading(true);
+            const response = await ApiService.getAllProducts();
+            console.log('All products response:', response);
+            if (response.success) {
+                setAllProducts(response.data);
+                console.log('All products loaded:', response.data);
+            } else {
+                toast.error('Failed to load products: ' + response.message);
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading all products:', error);
+            toast.error('Failed to load products: ' + error.message);
+            setLoading(false);
+        }
+    };
+
+    const loadReels = async () => {
+            setLoading(true);
+            const response = await ApiService.getInfluencerReels();
+            if (response.success) {
+                setReels(response.data);
+                // Reinitialize icons after loading reels
+                setTimeout(() => {
+                    if (window.lucide) {
+                        window.lucide.createIcons();
+                    }
+                }, 100);
+            } else {
+                toast.error('Failed to load reels: ' + response.message);
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading reels:', error);
+            toast.error('Failed to load reels: ' + error.message);
+            setLoading(false);
+        }
+    };
+
+    const loadSellers = async () => {
+        if (sellers.length > 0) {
+            setLoading(false); // Make sure to set loading to false
+            return Promise.resolve(); // Already loaded
+        }
+        
+        try {
+            console.log('Loading sellers...');
+            setLoading(true);
+            const response = await ApiService.getSellers();
+            console.log('Sellers response:', response);
+            if (response.success) {
+                setSellers(response.data);
+                console.log('Sellers loaded:', response.data);
+            } else {
+                toast.error('Failed to load sellers: ' + response.message);
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading sellers:', error);
+            toast.error('Failed to load sellers: ' + error.message);
+            setLoading(false);
+        }
+    };
+
+    const loadBrands = async () => {
+        if (brands.length > 0) {
+            setLoading(false); // Make sure to set loading to false
+            return Promise.resolve(); // Already loaded
+        }
+        
+        try {
+            console.log('Loading brands...');
+            setLoading(true);
+            const response = await ApiService.getBrands();
+            console.log('Brands response:', response);
+            if (response.success) {
+                setBrands(response.data);
+                console.log('Brands loaded:', response.data);
+            } else {
+                toast.error('Failed to load brands: ' + response.message);
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading brands:', error);
+            toast.error('Failed to load brands: ' + error.message);
+            setLoading(false);
+        }
+    };
+
+    const loadSellerProducts = async (vendorId) => {
+        try {
+            console.log('Loading seller products for vendorId:', vendorId);
+            setLoading(true);
+            const response = await ApiService.getSellerProducts(vendorId);
+            console.log('Seller products response:', response); // Debug log
+            if (response.success) {
+                setSellerProducts(response.data);
+                console.log('Seller products loaded:', response.data);
+            } else {
+                toast.error('Failed to load seller products: ' + response.message);
+                setSellerProducts([]); // Clear products on error
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading seller products:', error);
+            toast.error('Failed to load seller products: ' + error.message);
+            setSellerProducts([]); // Clear products on error
+            setLoading(false);
+        }
+    };
+
+    const loadBrandProducts = async (brandId) => {
+        try {
+            console.log('Loading brand products for brandId:', brandId);
+            setLoading(true);
+            const response = await ApiService.getBrandProducts(brandId);
+            console.log('Brand products response:', response); // Debug log
+            if (response.success) {
+                setBrandProducts(response.data);
+                console.log('Brand products loaded:', response.data);
+            } else {
+                toast.error('Failed to load brand products: ' + response.message);
+                setBrandProducts([]); // Clear products on error
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading brand products:', error);
+            toast.error('Failed to load brand products: ' + error.message);
+            setBrandProducts([]); // Clear products on error
+            setLoading(false);
+        }
+    };
+
+    // Function for fetching related products
+    const loadReelForEdit = async (reelId) => {
+        try {
+            setLoading(true);
+            const response = await ApiService.getReelById(reelId);
+            
+            if (response.success) {
+                const reelData = response.data;
+                
+                // Process product IDs - they come as a comma-separated string from the backend
+                let productIds = [];
+                if (reelData.product_ids) {
+                    if (Array.isArray(reelData.product_ids)) {
+                        productIds = reelData.product_ids;
+                    } else if (typeof reelData.product_ids === 'string') {
+                        productIds = reelData.product_ids.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+                    }
+                }
+                
+                // Load related data based on association type FIRST
+                if (reelData.seller_id) {
+                    console.log('Loading data for seller reel, seller_id:', reelData.seller_id);
+                    // Load seller data
+                    await loadSellers();
+                    console.log('Sellers loaded, count:', sellers.length);
+                    
+                    // Load seller products
+                    await loadSellerProducts(reelData.seller_id);
+                    console.log('Seller products loaded, count:', sellerProducts.length);
+                } else if (reelData.brand_id) {
+                    console.log('Loading data for brand reel, brand_id:', reelData.brand_id);
+                    // Load brand data
+                    await loadBrands();
+                    console.log('Brands loaded, count:', brands.length);
+                    
+                    // Load brand products
+                    await loadBrandProducts(reelData.brand_id);
+                    console.log('Brand products loaded, count:', brandProducts.length);
+                }
+                
+                // Now set the form data with the reel information
+                setUploadData({
+                    title: reelData.title || '',
+                    description: reelData.description || '',
+                    category: reelData.category_id || '',
+                    video: null, // We don't need to preload the video file
+                    thumbnail: null, // We don't need to preload the thumbnail
+                    video_url: reelData.video_url || '', // Store the video URL for display
+                    thumbnail_url: reelData.thumbnail || '', // Store the thumbnail URL for display
+                    associationType: reelData.seller_id ? 'seller' : (reelData.brand_id ? 'brand' : ''),
+                    selectedSeller: reelData.seller_id || '',
+                    selectedBrand: reelData.brand_id || '',
+                    selectedProducts: productIds
+                });
+                
+                console.log('Reel loaded for edit:', reelData);
+                console.log('Selected products:', productIds);
+                console.log('Association type:', reelData.seller_id ? 'seller' : (reelData.brand_id ? 'brand' : ''));
+                console.log('Selected seller:', reelData.seller_id || '');
+                console.log('Selected brand:', reelData.brand_id || '');
+                
+                // Ensure the association type is set in state
+                setUploadData(prev => ({
+                    ...prev,
+                    associationType: reelData.seller_id ? 'seller' : (reelData.brand_id ? 'brand' : prev.associationType)
+                }));
+                
+                // Load related products
+                if (productIds && productIds.length > 0) {
+                    await loadRelatedProducts(productIds, reelData.seller_id ? 'seller' : (reelData.brand_id ? 'brand' : ''), reelData.seller_id || '', reelData.brand_id || '');
+                }
+            } else {
+                toast.error('Failed to load reel: ' + response.message);
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading reel for edit:', error);
+            toast.error('Failed to load reel: ' + error.message);
+            setLoading(false);
+        }
+    };
+
+    const loadRelatedProducts = async (selectedProductIds, associationType, selectedSeller, selectedBrand) => {
+        try {
+            setLoading(true);
+            const response = await ApiService.getRelatedProducts(
+                selectedProductIds,
+                associationType,
+                selectedSeller,
+                selectedBrand
+            );
+            
+            if (response.success) {
+                setRelatedProducts(response.data);
+            } else {
+                // If API fails, fall back to demo implementation
+                console.log('API failed, using demo implementation');
+                // For demo, we'll just use some of the existing products as "related"
+                let related = [];
+                if (associationType === 'seller' && sellerProducts.length > 0) {
+                    related = sellerProducts.filter(p => !selectedProductIds.includes(p.product_id || p.id)).slice(0, 3);
+                } else if (associationType === 'brand' && brandProducts.length > 0) {
+                    related = brandProducts.filter(p => !selectedProductIds.includes(p.product_id || p.id)).slice(0, 3);
+                }
+                
+                setRelatedProducts(related);
+                
+                if (related.length > 0) {
+                    toast.info(`Found ${related.length} related products`);
+                }
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading related products:', error);
+            // Fall back to demo implementation on error
+            // For demo, we'll just use some of the existing products as "related"
+            let related = [];
+            if (associationType === 'seller' && sellerProducts.length > 0) {
+                related = sellerProducts.filter(p => !selectedProductIds.includes(p.product_id || p.id)).slice(0, 3);
+            } else if (associationType === 'brand' && brandProducts.length > 0) {
+                related = brandProducts.filter(p => !selectedProductIds.includes(p.product_id || p.id)).slice(0, 3);
+            }
+            
+            setRelatedProducts(related);
+            setLoading(false);
+            
+            if (related.length > 0) {
+                toast.info(`Found ${related.length} related products`);
+            }
+        }
+    };
+
+    const handleInputChange = (e) => {
+        const { name, value } = e.target;
+        setUploadData(prev => ({
+            ...prev,
+            [name]: value
+        }));
+    };
+
+    const handleFileChange = (e, fieldName) => {
+        const file = e.target.files[0];
+        console.log('File selected for field', fieldName, ':', file);
+        if (file) {
+            setUploadData(prev => ({
+                ...prev,
+                [fieldName]: file
+            }));
+            console.log('Upload data after file selection:', { ...uploadData, [fieldName]: file });
+        }
+    };
+
+    const handleAssociationTypeChange = (type) => {
+        setUploadData(prev => ({
+            ...prev,
+            associationType: type,
+            selectedSeller: '',
+            selectedBrand: '',
+            selectedProducts: []
+        }));
+        
+        // Clear products when changing association type
+        setSellerProducts([]);
+        setBrandProducts([]);
+        setRelatedProducts([]);
+        
+        // Load sellers or brands based on selection
+        if (type === 'seller') {
+            loadSellers();
+        } else if (type === 'brand') {
+            loadBrands();
+        }
+    };
+
+    const handleSellerChange = (vendorId) => {
+        setUploadData(prev => ({
+            ...prev,
+            selectedSeller: vendorId,
+            selectedProducts: []
+        }));
+        
+        // Clear brand products when selecting a seller
+        setBrandProducts([]);
+        setRelatedProducts([]);
+        
+        // Load seller products
+        if (vendorId) {
+            loadSellerProducts(vendorId);
+        } else {
+            setSellerProducts([]);
+        }
+    };
+
+    const handleBrandChange = (brandId) => {
+        setUploadData(prev => ({
+            ...prev,
+            selectedBrand: brandId,
+            selectedProducts: []
+        }));
+        
+        // Clear seller products when selecting a brand
+        setSellerProducts([]);
+        setRelatedProducts([]);
+        
+        // Load brand products
+        if (brandId) {
+            loadBrandProducts(brandId);
+        } else {
+            setBrandProducts([]);
+        }
+    };
+
+    const handleProductSelection = async (e) => {
+        const selected = Array.from(
+            e.target.selectedOptions,
+            option => parseInt(option.value)
+        );
+        
+        // Validate that max 3 products can be selected
+        if (selected.length > 3) {
+            toast.warn('You can select maximum 3 products');
+            // Keep only the first 3 selected products
+            const limitedSelection = selected.slice(0, 3);
+            setUploadData(prev => ({
+                ...prev,
+                selectedProducts: limitedSelection
+            }));
+        } else {
+            setUploadData(prev => ({
+                ...prev,
+                selectedProducts: selected
+            }));
+        }
+        
+        // Clear related products when selection changes
+        // Related products are just suggestions and should not be automatically loaded
+        setRelatedProducts([]);
+    };
+
+    const handleRelatedProductSelection = (productId) => {
+        // DO NOT add related products to main selection
+        // Related products should only be suggestions, not actual selections
+        toast.info('Related products are suggestions only. Please select products from the main product list above.');
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        
+        // Log all form data before validation
+        console.log('Form data before validation:', uploadData);
+        
+        // More robust validation with detailed logging
+        const validationDetails = {
+            title: !!uploadData.title,
+            category: !!uploadData.category,
+            video: !!uploadData.video,
+            associationType: !!uploadData.associationType,
+            sellerOrBrand: (uploadData.associationType === 'seller' && !!uploadData.selectedSeller) || 
+                          (uploadData.associationType === 'brand' && !!uploadData.selectedBrand),
+            selectedProducts: uploadData.selectedProducts && uploadData.selectedProducts.length > 0,
+            productCount: uploadData.selectedProducts ? uploadData.selectedProducts.length : 0
+        };
+        
+        console.log('Validation details:', validationDetails);
+        
+        const isFormValid = 
+            uploadData.title && 
+            uploadData.category && 
+            (editingReelId || uploadData.video) && // Video is not required when editing
+            uploadData.associationType && 
+            ((uploadData.associationType === 'seller' && uploadData.selectedSeller) || 
+             (uploadData.associationType === 'brand' && uploadData.selectedBrand)) &&
+            uploadData.selectedProducts && 
+            uploadData.selectedProducts.length > 0 &&
+            uploadData.selectedProducts.length <= 3;
+        
+        if (!isFormValid) {
+            console.log('Form validation failed:', validationDetails);
+            toast.error('Please fill in all required fields correctly');
+            return;
+        }
+
+        setLoading(true);
+        
+        try {
+            if (editingReelId) {
+                // Edit existing reel (with optional file upload)
+                if (uploadData.video || uploadData.thumbnail) {
+                    // If files are selected, use FormData
+                    const formData = new FormData();
+                    formData.append('title', uploadData.title || '');
+                    formData.append('description', uploadData.description || '');
+                    formData.append('category', uploadData.category || '');
+                    formData.append('associationType', uploadData.associationType || '');
+                    formData.append('selectedSeller', uploadData.selectedSeller || '');
+                    formData.append('selectedBrand', uploadData.selectedBrand || '');
+                    formData.append('selectedProducts', JSON.stringify(uploadData.selectedProducts));
+                    
+                    // Add files if they exist
+                    if (uploadData.video) {
+                        formData.append('video', uploadData.video);
+                    }
+                    
+                    if (uploadData.thumbnail) {
+                        formData.append('thumbnail', uploadData.thumbnail);
+                    }
+                    
+                    const response = await ApiService.editReelWithFiles(editingReelId, formData);
+                    
+                    if (response.success) {
+                        toast.success('Reel updated successfully!');
+                        // Refresh the reels list
+                        await loadReels();
+                        // Reset form
+                        setShowUploadForm(false);
+                        resetForm();
+                    } else {
+                        toast.error('Update failed: ' + response.message);
+                    }
+                } else {
+                    // No files selected, use regular JSON data
+                    const reelData = {
+                        title: uploadData.title,
+                        description: uploadData.description,
+                        category: uploadData.category,
+                        associationType: uploadData.associationType,
+                        selectedSeller: uploadData.selectedSeller,
+                        selectedBrand: uploadData.selectedBrand,
+                        selectedProducts: uploadData.selectedProducts
+                    };
+                    
+                    const response = await ApiService.editReel(editingReelId, reelData);
+                    
+                    if (response.success) {
+                        toast.success('Reel updated successfully!');
+                        // Refresh the reels list
+                        await loadReels();
+                        // Reset form
+                        setShowUploadForm(false);
+                        resetForm();
+                    } else {
+                        toast.error('Update failed: ' + response.message);
+                    }
+                }
+            } else {
+                // Upload new reel
+                // Prepare form data for upload
+                const formData = new FormData();
+                console.log('=== CREATING FORM DATA ===');
+                console.log('Upload data:', uploadData);
+                
+                // Add all fields to formData
+                formData.append('title', uploadData.title || '');
+                formData.append('description', uploadData.description || '');
+                formData.append('category', uploadData.category || '');
+                formData.append('associationType', uploadData.associationType || '');
+                formData.append('selectedSeller', uploadData.selectedSeller || '');
+                formData.append('selectedBrand', uploadData.selectedBrand || '');
+                formData.append('selectedProducts', JSON.stringify(uploadData.selectedProducts));
+                
+                // Add files if they exist
+                if (uploadData.video) {
+                    formData.append('video', uploadData.video);
+                    console.log('Video file appended to formData');
+                }
+                
+                if (uploadData.thumbnail) {
+                    formData.append('thumbnail', uploadData.thumbnail);
+                    console.log('Thumbnail file appended to formData');
+                } else {
+                    console.log('No thumbnail file to append');
+                }
+                
+                console.log('FormData contents:');
+                for (let [key, value] of formData.entries()) {
+                    console.log(key, value);
+                }
+                
+                console.log('Sending upload request with data:', uploadData);
+                
+                const response = await ApiService.uploadReel(formData);
+                
+                if (response.success) {
+                    toast.success('Reel uploaded successfully!');
+                    // Refresh the reels list
+                    await loadReels();
+                    setShowUploadForm(false);
+                    resetForm();
+                } else {
+                    toast.error('Upload failed: ' + response.message);
+                }
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Upload error:', error);
+            // Show more specific error message
+            const errorMessage = error.message || 'Unknown error occurred';
+            toast.error('Upload failed: ' + errorMessage);
+            setLoading(false);
+        }
+    };
+
+    const resetForm = () => {
+        setUploadData({
+            title: '',
+            description: '',
+            category: '',
+            video: null,
+            thumbnail: null,
+            video_url: '',
+            thumbnail_url: '',
+            associationType: '',
+            selectedSeller: '',
+            selectedBrand: '',
+            selectedProducts: []
+        });
+        setSellerProducts([]);
+        setBrandProducts([]);
+        setRelatedProducts([]);
+        setEditingReelId(null);
+    };
+
+    const handleCancel = () => {
+        // If we're editing, navigate back to the base URL
+        if (editingReelId) {
+            navigate('/studio/influencer/upload');
+        } else {
+            // Otherwise, just toggle the form visibility
+            setShowUploadForm(false);
+            resetForm();
+        }
+    };
+
+    const handleUploadNewReel = () => {
+        setShowUploadForm(true);
+        resetForm();
+    };
+
+    const handleViewReel = (reel) => {
+        // Navigate to the reel details page
+        navigate(`/studio/influencer/upload/${reel.id}/details`);
+    };
+
+    const handleEditReel = (reel) => {
+        // Navigate to the edit URL instead of loading data in the same view
+        navigate(`/studio/influencer/upload/${reel.id}`);
+    };
+
+    const handleDeleteReel = async (reelId) => {
+        if (window.confirm('Are you sure you want to delete this reel? This action cannot be undone.')) {
+            try {
+                setLoading(true);
+                const response = await ApiService.deleteReel(reelId);
+                
+                if (response.success) {
+                    toast.success('Reel deleted successfully!');
+                    // Refresh the reels list
+                    await loadReels();
+                } else {
+                    toast.error('Delete failed: ' + response.message);
+                }
+                
+                setLoading(false);
+            } catch (error) {
+                console.error('Delete error:', error);
+                toast.error('Delete failed: ' + error.message);
+                setLoading(false);
+            }
+        }
+    };
+
+    const getStatusBadge = (status) => {
+        switch (status) {
+            case 'approved':
+                return <span className="badge bg-success">Approved</span>;
+            case 'pending':
+                return <span className="badge bg-warning">Pending</span>;
+            case 'rejected':
+                return <span className="badge bg-danger">Rejected</span>;
+            default:
+                return <span className="badge bg-secondary">Unknown</span>;
+        }
+    };
+
+    return (
+        <div className="container-fluid">
+            <div className="row">
+                <div className="col-12">
+                    <div className="page-title-box d-flex align-items-center justify-content-between py-3">
+                        <h4 className="mb-0">{editingReelId ? 'Edit Reel' : 'Upload Reels'}</h4>
+                    </div>
+                </div>
+            </div>
+
+            <div className="row">
+                <div className="col-12">
+                    <div className="card">
+                        <div className="card-header" style={{ backgroundColor: 'transparent' }}>
+                            <div className="d-flex justify-content-between align-items-center">
+                                <h5 className="mb-0">My Reels</h5>
+                                <button 
+                                    className="btn btn-light"
+                                    onClick={showUploadForm ? handleCancel : handleUploadNewReel}
+                                >
+                                    <i className={`mdi mdi-${showUploadForm ? 'close' : 'plus'} me-1`}></i>
+                                    {showUploadForm ? 'Cancel' : editingReelId ? 'Back to Reels' : 'Upload New Reel'}
+                                </button>
+                            </div>
+                        </div>
+                        <div className="card-body">
+                            {showUploadForm ? (
+                                <form onSubmit={handleSubmit} className="mb-4">
+                                    <div className="row">
+                                        <div className="col-md-6">
+                                            <div className="mb-3">
+                                                <label className="form-label">Title *</label>
+                                                <input
+                                                    type="text"
+                                                    className="form-control"
+                                                    name="title"
+                                                    value={uploadData.title}
+                                                    onChange={handleInputChange}
+                                                    required
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="col-md-6">
+                                            <div className="mb-3">
+                                                <label className="form-label">Category *</label>
+                                                <select
+                                                    className="form-select"
+                                                    name="category"
+                                                    value={uploadData.category}
+                                                    onChange={handleInputChange}
+                                                    required
+                                                >
+                                                    <option value="">Select Category</option>
+                                                    {categories.map(category => (
+                                                        <option key={category.id} value={category.id}>
+                                                            {category.name}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="mb-3">
+                                        <label className="form-label">Description</label>
+                                        <textarea
+                                            className="form-control"
+                                            name="description"
+                                            value={uploadData.description}
+                                            onChange={handleInputChange}
+                                            rows="3"
+                                        ></textarea>
+                                    </div>
+
+                                    <div className="row">
+                                        <div className="col-md-6">
+                                            <div className="mb-3">
+                                                <label className="form-label">Video *</label>
+                                                {editingReelId ? (
+                                                    <div>
+                                                        <input
+                                                            type="file"
+                                                            className="form-control"
+                                                            accept="video/*"
+                                                            onChange={(e) => handleFileChange(e, 'video')}
+                                                        />
+                                                        {uploadData.video_url && (
+                                                            <small className="form-text text-muted">
+                                                                Current video: {uploadData.video_url}
+                                                            </small>
+                                                        )}
+                                                        <small className="form-text text-muted">Leave empty to keep current video, or select a new video to replace it.</small>
+                                                    </div>
+                                                ) : (
+                                                    <input
+                                                        type="file"
+                                                        className="form-control"
+                                                        accept="video/*"
+                                                        onChange={(e) => handleFileChange(e, 'video')}
+                                                        required
+                                                    />
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="col-md-6">
+                                            <div className="mb-3">
+                                                <label className="form-label">Thumbnail</label>
+                                                {editingReelId ? (
+                                                    <div>
+                                                        <input
+                                                            type="file"
+                                                            className="form-control"
+                                                            accept="image/*"
+                                                            onChange={(e) => handleFileChange(e, 'thumbnail')}
+                                                        />
+                                                        {uploadData.thumbnail_url && (
+                                                            <small className="form-text text-muted">
+                                                                Current thumbnail: {uploadData.thumbnail_url}
+                                                            </small>
+                                                        )}
+                                                        {uploadData.thumbnail_url && (
+                                                            <div>
+                                                                <img src={uploadData.thumbnail_url} alt="Current thumbnail" style={{maxWidth: '100px', maxHeight: '100px'}} />
+                                                            </div>
+                                                        )}
+                                                        <small className="form-text text-muted">Leave empty to keep current thumbnail, or select a new thumbnail to replace it.</small>
+                                                    </div>
+                                                ) : (
+                                                    <input
+                                                        type="file"
+                                                        className="form-control"
+                                                        accept="image/*"
+                                                        onChange={(e) => handleFileChange(e, 'thumbnail')}
+                                                    />
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="mb-3">
+                                        <label className="form-label">Association Type *</label>
+                                        <div>
+                                            <div className="form-check form-check-inline">
+                                                <input
+                                                    className="form-check-input"
+                                                    type="radio"
+                                                    name="associationType"
+                                                    id="sellerRadio"
+                                                    checked={uploadData.associationType === 'seller'}
+                                                    onChange={() => handleAssociationTypeChange('seller')}
+                                                />
+                                                <label className="form-check-label" htmlFor="sellerRadio">
+                                                    Seller
+                                                </label>
+                                            </div>
+                                            <div className="form-check form-check-inline">
+                                                <input
+                                                    className="form-check-input"
+                                                    type="radio"
+                                                    name="associationType"
+                                                    id="brandRadio"
+                                                    checked={uploadData.associationType === 'brand'}
+                                                    onChange={() => handleAssociationTypeChange('brand')}
+                                                />
+                                                <label className="form-check-label" htmlFor="brandRadio">
+                                                    Brand
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {uploadData.associationType === 'seller' && (
+                                        <div className="mb-3">
+                                            <label className="form-label">Select Seller *</label>
+                                            <select
+                                                className="form-select"
+                                                value={uploadData.selectedSeller}
+                                                onChange={(e) => handleSellerChange(e.target.value)}
+                                                required
+                                            >
+                                                <option value="">Select Seller</option>
+                                                {sellers.map(seller => (
+                                                    <option key={seller.vendor_id} value={seller.vendor_id} selected={parseInt(seller.vendor_id) == parseInt(uploadData.selectedSeller)}>
+                                                        {seller.firstname} {seller.lastname}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
+
+                                    {uploadData.associationType === 'brand' && (
+                                        <div className="mb-3">
+                                            <label className="form-label">Select Brand *</label>
+                                            <select
+                                                className="form-select"
+                                                value={uploadData.selectedBrand}
+                                                onChange={(e) => handleBrandChange(e.target.value)}
+                                                required
+                                            >
+                                                <option value="">Select Brand</option>
+                                                {brands.map(brand => (
+                                                    <option key={brand.id} value={brand.id} selected={parseInt(brand.id) == parseInt(uploadData.selectedBrand)}>
+                                                        {brand.name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
+
+                                    {(uploadData.associationType === 'seller' && uploadData.selectedSeller) ||
+                                     (uploadData.associationType === 'brand' && uploadData.selectedBrand) ? (
+                                        <div className="mb-3">
+                                            <label className="form-label">Select Products *</label>
+                                            <select
+                                                className="form-select"
+                                                multiple
+                                                value={uploadData.selectedProducts.map(String)}
+                                                onChange={handleProductSelection}
+                                                required
+                                            >
+                                                {(uploadData.associationType === 'seller' ? sellerProducts : brandProducts).map(product => (
+                                                    <option 
+                                                        key={product.product_id || product.id} 
+                                                        value={product.product_id || product.id}
+                                                    >
+                                                        {product.name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    ) : null}
+
+                                    {relatedProducts.length > 0 && (
+                                        <div className="mb-3">
+                                            <label className="form-label">Related Products (Suggestions Only)</label>
+                                            <div className="alert alert-info">
+                                                <i className="mdi mdi-information-outline me-1"></i>
+                                                These are related products for your reference. Only products selected in the main product list above will be associated with this reel.
+                                            </div>
+                                            <div className="row">
+                                                {relatedProducts.map(product => (
+                                                    <div className="col-md-4 mb-3" key={product.product_id || product.id}>
+                                                        <div className="card h-100">
+                                                            <div className="card-body">
+                                                                <h6 className="card-title">{product.name}</h6>
+                                                                <p className="card-text">
+                                                                    <small className="text-muted">
+                                                                        This is a related product suggestion.
+                                                                        Please select from the main product list above to associate products with your reel.
+                                                                    </small>
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="d-grid gap-2 d-md-flex justify-content-md-end">
+                                        <button 
+                                            type="submit" 
+                                            className="btn btn-primary"
+                                            disabled={loading}
+                                        >
+                                            {loading ? (
+                                                <>
+                                                    <span className="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                                    <span>Loading...</span>
+                                                </>
+                                            ) : editingReelId ? (
+                                                'Update Reel'
+                                            ) : (
+                                                'Upload Reel'
+                                            )}
+                                        </button>
+                                    </div>
+                                </form>
+                            ) : (
+                                <div className="table-responsive">
+                                    <table className="table table-centered table-nowrap mb-0">
+                                        <thead className="table-light">
+                                            <tr>
+                                                <th>Title</th>
+                                                <th>Category</th>
+                                                <th>Status</th>
+                                                <th>Reel Count</th>
+                                                <th>Created</th>
+                                                <th className="text-end">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {reels.map((reel) => (
+                                                <tr key={reel.id}>
+                                                    <td>
+                                                        <h6 className="mb-0">{reel.title}</h6>
+                                                    </td>
+                                                    <td>{reel.category_name}</td>
+                                                    <td>{getStatusBadge(reel.status)}</td>
+                                                    <td>{reel.related_products_count || 0}</td>
+                                                    <td>{new Date(reel.created_at).toLocaleDateString()}</td>
+                                                    <td>
+                                                        <div className="d-flex gap-1 justify-content-end">
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-outline-primary btn-sm"
+                                                                onClick={() => handleViewReel(reel)}
+                                                                title="View"
+                                                            >
+                                                                <i data-lucide="eye"></i>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-outline-warning btn-sm"
+                                                                onClick={() => handleEditReel(reel)}
+                                                                title="Edit"
+                                                            >
+                                                                <i data-lucide="pencil"></i>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-outline-danger btn-sm"
+                                                                onClick={() => handleDeleteReel(reel.id)}
+                                                                title="Delete"
+                                                            >
+                                                                <i data-lucide="trash-2"></i>
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+
+                            {loading && (
+                                <div className="text-center mt-3">
+                                    <div className="spinner-border" role="status">
+                                        <span className="visually-hidden">Loading...</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
