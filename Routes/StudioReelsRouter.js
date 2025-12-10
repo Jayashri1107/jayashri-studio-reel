@@ -220,9 +220,15 @@ router.post('/azure/upload', verifyToken, upload.fields([
             return res.status(400).json({ success: false, message: 'No video file uploaded' });
         }
 
+<<<<<<< HEAD
         const directUrl = process.env.AZURE_UPLOAD_URL || 'https://reels-func.azurewebsites.net/api/UploadReel?code=LsbfgoydZjIq23O2qFHcS5xCEab3_incYmQAGSk_c2JnAzFun_DN_Q==';
         const baseUrl = process.env.AZURE_UPLOAD_BASE_URL;
         const functionKey = process.env.AZURE_FUNCTION_KEY;
+=======
+        const directUrl = process.env.AZURE_UPLOAD_URL; // full URL including ?code=...
+        const baseUrl = process.env.AZURE_UPLOAD_BASE_URL; // e.g. https://reels-func.azurewebsites.net
+        const functionKey = process.env.AZURE_FUNCTION_KEY; // optional header key
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
 
         let targetUrl = directUrl;
         const headers = {};
@@ -230,6 +236,18 @@ router.post('/azure/upload', verifyToken, upload.fields([
             targetUrl = `${baseUrl.replace(/\/$/, '')}/api/UploadReel`;
             if (functionKey) headers['x-functions-key'] = functionKey;
         }
+<<<<<<< HEAD
+=======
+        if (!targetUrl) {
+            console.warn('Azure upload URL not configured. Returning success with local file path.');
+            // Return success with local file path instead of failing
+            return res.json({ 
+                success: true, 
+                url: `/uploads/${file.filename}`,
+                message: 'File uploaded locally as Azure configuration is missing'
+            });
+        }
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
 
         const filename = (req.body?.filename) || (file.originalname || 'upload.mp4');
         if (filename) headers['x-filename'] = filename;
@@ -247,6 +265,14 @@ router.post('/azure/upload', verifyToken, upload.fields([
             `Content-Disposition: form-data; name="file"; filename="${file.originalname}"${CRLF}` +
             `Content-Type: ${file.mimetype}${CRLF}${CRLF}`
         );
+<<<<<<< HEAD
+=======
+        const partVideoHeader = Buffer.from(
+            `${CRLF}--${boundary}${CRLF}` +
+            `Content-Disposition: form-data; name="video"; filename="${file.originalname}"${CRLF}` +
+            `Content-Type: ${file.mimetype}${CRLF}${CRLF}`
+        );
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         const epilogue = Buffer.from(`${CRLF}--${boundary}--${CRLF}`);
 
         const options = {
@@ -265,12 +291,16 @@ router.post('/azure/upload', verifyToken, upload.fields([
                 if (outRes.statusCode >= 200 && outRes.statusCode < 300) {
                     let data = body;
                     try { data = JSON.parse(body); } catch (_) {}
+<<<<<<< HEAD
                     let url = typeof data === 'string' ? data : (data?.url || data?.videoUrl || data?.video_url || data?.location || data?.blobUrl);
                     const sas = process.env.AZURE_BLOB_SAS_QUERY;
                     if (url && sas) {
                         const cleanSas = String(sas).replace(/^\?/, '');
                         url = url.includes('?') ? `${url}&${cleanSas}` : `${url}?${cleanSas}`;
                     }
+=======
+                    const url = typeof data === 'string' ? data : (data?.url || data?.videoUrl || data?.video_url || data?.location || data?.blobUrl);
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                     if (!url) {
                         return res.status(200).json({ success: true, data, message: 'Uploaded to Azure, but no URL found' });
                     }
@@ -282,11 +312,26 @@ router.post('/azure/upload', verifyToken, upload.fields([
         outReq.on('error', (err) => {
             return res.status(502).json({ success: false, message: err.message });
         });
+<<<<<<< HEAD
         const fileStream = fs.createReadStream(file.path);
         outReq.write(partFile);
         fileStream.on('end', () => {
             outReq.write(epilogue);
             outReq.end();
+=======
+
+        const fileStream = fs.createReadStream(file.path);
+        outReq.write(partFile);
+        fileStream.on('end', () => {
+            outReq.write(partVideoHeader);
+            // Re-stream the same file contents for the 'video' field
+            const fileStream2 = fs.createReadStream(file.path);
+            fileStream2.on('end', () => {
+                outReq.write(epilogue);
+                outReq.end();
+            });
+            fileStream2.pipe(outReq, { end: false });
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         });
         fileStream.pipe(outReq, { end: false });
     } catch (error) {

@@ -6,6 +6,7 @@ const https = require('https')
 
 const AZURE_UPLOAD_URL = process.env.AZURE_UPLOAD_URL || 'https://reels-func.azurewebsites.net/api/UploadReel?code=LsbfgoydZjIq23O2qFHcS5xCEab3_incYmQAGSk_c2JnAzFun_DN_Q=='
 
+<<<<<<< HEAD
 const appendSAS = (url) => {
     try {
         const sas = process.env.AZURE_BLOB_SAS_QUERY;
@@ -32,6 +33,13 @@ const uploadToAzure = (filePath, filename, mimetype = 'application/octet-stream'
             if (filename && !urlObj.searchParams.has('filename')) {
                 urlObj.searchParams.append('filename', filename)
             }
+=======
+const uploadToAzure = (filePath, filename) => {
+    return new Promise((resolve, reject) => {
+        try {
+            const urlObj = new URL(AZURE_UPLOAD_URL)
+            const headers = { 'x-filename': filename || 'upload.bin' }
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             const options = {
                 method: 'POST',
                 hostname: urlObj.hostname,
@@ -55,6 +63,7 @@ const uploadToAzure = (filePath, filename, mimetype = 'application/octet-stream'
                 })
             })
             req.on('error', (err) => reject(err))
+<<<<<<< HEAD
 
             const CRLF = '\r\n'
             const partFileHeader = Buffer.from(
@@ -71,6 +80,9 @@ const uploadToAzure = (filePath, filename, mimetype = 'application/octet-stream'
                 req.end()
             })
             stream.pipe(req, { end: false })
+=======
+            fs.createReadStream(filePath).pipe(req)
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         } catch (err) {
             reject(err)
         }
@@ -500,9 +512,15 @@ const incrementReelView = async (req, res) => {
         // First, check if the reel exists
         const checkQuery = `
             SELECT reel_id FROM (
+<<<<<<< HEAD
                 SELECT reel_id FROM oc_influencer_reels WHERE reel_id = ?
                 UNION ALL
                 SELECT reel_id FROM oc_seller_reels WHERE reel_id = ?
+=======
+                SELECT reel_id FROM influencer_reels WHERE reel_id = ?
+                UNION ALL
+                SELECT reel_id FROM seller_reels WHERE reel_id = ?
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             ) AS reels
         `;
         
@@ -523,9 +541,15 @@ const incrementReelView = async (req, res) => {
                 });
             }
             
+<<<<<<< HEAD
             // Try to increment view count in oc_influencer_reels first
             const incrementInfluencerQuery = `
                 UPDATE oc_influencer_reels
+=======
+            // Try to increment view count in influencer_reels first
+            const incrementInfluencerQuery = `
+                UPDATE influencer_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 SET views = views + 1 
                 WHERE reel_id = ?
             `;
@@ -540,10 +564,17 @@ const incrementReelView = async (req, res) => {
                     });
                 }
                 
+<<<<<<< HEAD
                 // If no rows were affected, try oc_seller_reels
                 if (incResult.affectedRows === 0) {
                     const incrementSellerQuery = `
                         UPDATE oc_seller_reels
+=======
+                // If no rows were affected, try seller_reels
+                if (incResult.affectedRows === 0) {
+                    const incrementSellerQuery = `
+                        UPDATE seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         SET views = views + 1 
                         WHERE reel_id = ?
                     `;
@@ -643,7 +674,11 @@ const toggleReelLike = async (req, res) => {
                     
                     // Decrement like count in the appropriate table
                     const decrementLikesQuery = `
+<<<<<<< HEAD
                         UPDATE oc_influencer_reels
+=======
+                        UPDATE influencer_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         SET likes = likes - 1 
                         WHERE reel_id = ?
                     `;
@@ -653,7 +688,11 @@ const toggleReelLike = async (req, res) => {
                             console.error('Error decrementing influencer reel likes:', decErr);
                             // Try seller reels
                             const decrementSellerLikesQuery = `
+<<<<<<< HEAD
                                 UPDATE oc_seller_reels
+=======
+                                UPDATE seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                 SET likes = likes - 1 
                                 WHERE reel_id = ?
                             `;
@@ -692,7 +731,11 @@ const toggleReelLike = async (req, res) => {
                     
                     // Increment like count in the appropriate table
                     const incrementLikesQuery = `
+<<<<<<< HEAD
                         UPDATE oc_influencer_reels
+=======
+                        UPDATE influencer_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         SET likes = likes + 1 
                         WHERE reel_id = ?
                     `;
@@ -702,7 +745,11 @@ const toggleReelLike = async (req, res) => {
                             console.error('Error incrementing influencer reel likes:', incErr);
                             // Try seller reels
                             const incrementSellerLikesQuery = `
+<<<<<<< HEAD
                                 UPDATE oc_seller_reels
+=======
+                                UPDATE seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                 SET likes = likes + 1 
                                 WHERE reel_id = ?
                             `;
@@ -756,9 +803,15 @@ const toggleCreatorFollow = async (req, res) => {
     try {
         // First, get the creator ID from the reel
         const getCreatorQuery = `
+<<<<<<< HEAD
             SELECT influencer_id as creator_id FROM oc_influencer_reels WHERE reel_id = ?
             UNION
             SELECT seller_id as creator_id FROM oc_seller_reels WHERE reel_id = ?
+=======
+            SELECT influencer_id as creator_id FROM influencer_reels WHERE reel_id = ?
+            UNION
+            SELECT seller_id as creator_id FROM seller_reels WHERE reel_id = ?
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         `;
         
         db.query(getCreatorQuery, [id, id], (creatorErr, creatorResults) => {
@@ -1030,6 +1083,7 @@ const uploadInfluencerReel = async (req, res) => {
     let videoUrl = null;
     if (videoFile) {
         try {
+<<<<<<< HEAD
             videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename, videoFile.mimetype || 'application/octet-stream');
         } catch (e) {
             console.error('Azure upload failed:', e && e.message ? e.message : e);
@@ -1041,6 +1095,13 @@ const uploadInfluencerReel = async (req, res) => {
             try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
             return res.status(502).json({ success: false, message: 'Azure upload failed' });
         }
+=======
+            videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename);
+        } catch (e) {
+            console.error('Azure upload failed:', e && e.message ? e.message : e)
+        }
+        try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
     }
     
     const thumbnailFile = req.files.thumbnail ? req.files.thumbnail[0] : null;
@@ -1086,10 +1147,17 @@ const uploadInfluencerReel = async (req, res) => {
             }
             
             try {
+<<<<<<< HEAD
                 // Insert the reel into the database (using oc_influencer_reels table)
                 const influencerId = userId;
                 const reelQuery = `
                     INSERT INTO oc_influencer_reels
+=======
+                // Insert the reel into the database (using influencer_reels table)
+                const influencerId = userId;
+                const reelQuery = `
+                    INSERT INTO influencer_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                     (influencer_id, title, description, video_url, thumbnail, brand_id, status, date_added) 
                     VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
                 `;
@@ -1111,6 +1179,7 @@ const uploadInfluencerReel = async (req, res) => {
                 
                 connection.query(reelQuery, reelValues, (err, result) => {
                     if (err) {
+<<<<<<< HEAD
                         const altQuery = `
                             INSERT INTO oc_influencer_reels
                             (influencer_id, title, description, video_url, thumbnail, status, date_added) 
@@ -1297,6 +1366,17 @@ const uploadInfluencerReel = async (req, res) => {
                                 })
                             })
                         }
+=======
+                        return connection.rollback(() => {
+                            connection.release()
+                            console.error('Database error inserting influencer reel:', err)
+                            return res.status(500).json({ 
+                                success: false, 
+                                message: 'Error saving reel',
+                                error: err.message 
+                            })
+                        })
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                     }
                     
                     const reelId = result.insertId;
@@ -1312,7 +1392,11 @@ const uploadInfluencerReel = async (req, res) => {
 
                     // Insert category association
                     const categoryQuery = `
+<<<<<<< HEAD
                         INSERT INTO oc_influencer_reel_to_category
+=======
+                        INSERT INTO influencer_reel_to_category 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         (reel_id, category_id) 
                         VALUES (?, ?)
                     `;
@@ -1334,7 +1418,11 @@ const uploadInfluencerReel = async (req, res) => {
                             // Insert product associations
                             if (selectedProducts && selectedProducts.length > 0) {
                                 const productQuery = `
+<<<<<<< HEAD
                                     INSERT INTO oc_influencer_reel_product
+=======
+                                    INSERT INTO influencer_reel_product 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                     (reel_id, product_id) 
                                     VALUES ?
                                 `;
@@ -1404,7 +1492,11 @@ const uploadInfluencerReel = async (req, res) => {
                         // Insert product associations
                         if (selectedProducts && selectedProducts.length > 0) {
                             const productQuery = `
+<<<<<<< HEAD
                                 INSERT INTO oc_influencer_reel_product
+=======
+                                INSERT INTO influencer_reel_product 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                 (reel_id, product_id) 
                                 VALUES ?
                             `;
@@ -1489,7 +1581,11 @@ const uploadInfluencerReel = async (req, res) => {
 
 // Upload a new seller reel
 const uploadSellerReel = async (req, res) => {
+<<<<<<< HEAD
     // Similar implementation for seller reels using oc_seller_reels table
+=======
+    // Similar implementation for seller reels using seller_reels table
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
     // Log the received data for debugging
     console.log('=== NEW SELLER REEL UPLOAD REQUEST ===')
     console.log('Request headers:', req.headers)
@@ -1655,6 +1751,7 @@ const uploadSellerReel = async (req, res) => {
     let videoUrl = null;
     if (videoFile) {
         try {
+<<<<<<< HEAD
             videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename, videoFile.mimetype || 'application/octet-stream');
         } catch (e) {
             console.error('Azure upload failed:', e && e.message ? e.message : e);
@@ -1666,6 +1763,13 @@ const uploadSellerReel = async (req, res) => {
             try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
             return res.status(502).json({ success: false, message: 'Azure upload failed' });
         }
+=======
+            videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename);
+        } catch (e) {
+            console.error('Azure upload failed:', e && e.message ? e.message : e)
+        }
+        try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
     }
     
     const thumbnailFile = req.files.thumbnail ? req.files.thumbnail[0] : null;
@@ -1743,7 +1847,11 @@ const uploadSellerReel = async (req, res) => {
                     
                     
                     const reelQuery = `
+<<<<<<< HEAD
                         INSERT INTO oc_seller_reels
+=======
+                        INSERT INTO seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         (seller_id, title, description, video_url, thumbnail, brand_id, status, date_added) 
                         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
                     `;
@@ -1784,7 +1892,11 @@ const uploadSellerReel = async (req, res) => {
                             const insertProductsAndCommit = () => {
                                 if (selectedProducts && selectedProducts.length > 0) {
                                     const productQuery = `
+<<<<<<< HEAD
                                         INSERT INTO oc_seller_reel_product
+=======
+                                        INSERT INTO seller_reel_product 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                         (reel_id, product_id) 
                                         VALUES ?
                                     `;
@@ -1845,7 +1957,11 @@ const uploadSellerReel = async (req, res) => {
                             const catId = parseInt(category, 10);
                             if (!Number.isNaN(catId)) {
                                 const categoryQuery = `
+<<<<<<< HEAD
                                     INSERT INTO oc_seller_reel_to_category
+=======
+                                    INSERT INTO seller_reel_to_category 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                     (reel_id, category_id) 
                                     VALUES (?, ?)
                                 `;
@@ -1881,7 +1997,11 @@ const uploadSellerReel = async (req, res) => {
                                         });
                                     }
                                     const newCatId = catResult.insertId;
+<<<<<<< HEAD
                                     const insOtherCat = `INSERT INTO oc_seller_reel_to_category (reel_id, category_id) VALUES (?, ?)`;
+=======
+                                    const insOtherCat = `INSERT INTO seller_reel_to_category (reel_id, category_id) VALUES (?, ?)`;
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                     connection.query(insOtherCat, [reelId, newCatId], (linkErr) => {
                                         if (linkErr) {
                                             return connection.rollback(() => {
@@ -1984,6 +2104,7 @@ const editReel = async (req, res) => {
     if (videoFile) {
         try {
             videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename);
+<<<<<<< HEAD
             // Delete local file after successful Azure upload
             try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
         } catch (e) {
@@ -2006,6 +2127,13 @@ const editReel = async (req, res) => {
         });
     }
     
+=======
+        } catch (e) {
+            console.error('Azure upload failed:', e && e.message ? e.message : e)
+        }
+        try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
+    }
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
     const thumbnailUrl = thumbnailFile ? `/uploads/${thumbnailFile.filename}` : null;
 
     try {
@@ -2020,7 +2148,11 @@ const editReel = async (req, res) => {
                     return res.status(500).json({ success: false, message: 'Transaction error' });
                 }
 
+<<<<<<< HEAD
                 const checkInfluencer = `SELECT reel_id FROM oc_influencer_reels WHERE reel_id = ?`;
+=======
+                const checkInfluencer = `SELECT reel_id FROM influencer_reels WHERE reel_id = ?`;
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 connection.query(checkInfluencer, [id], (err, results) => {
                     if (err) {
                         return connection.rollback(() => {
@@ -2030,9 +2162,15 @@ const editReel = async (req, res) => {
                     }
 
                     const isInfluencerReel = results.length > 0;
+<<<<<<< HEAD
                     const tableName = isInfluencerReel ? 'oc_influencer_reels' : 'oc_seller_reels';
                     const categoryTable = isInfluencerReel ? 'oc_influencer_reel_to_category' : 'oc_seller_reel_to_category';
                     const productTable = isInfluencerReel ? 'oc_influencer_reel_product' : 'oc_seller_reel_product';
+=======
+                    const tableName = isInfluencerReel ? 'influencer_reels' : 'seller_reels';
+                    const categoryTable = isInfluencerReel ? 'influencer_reel_to_category' : 'seller_reel_to_category';
+                    const productTable = isInfluencerReel ? 'influencer_reel_product' : 'seller_reel_product';
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
 
                     const updateFields = [];
                     const updateValues = [];
@@ -2465,9 +2603,15 @@ const createReel = async (req, res) => {
                     const vendorId = vendorResults[0].vendor_id;
                     console.log('Found vendor ID for user:', userId, 'is:', vendorId);
                     
+<<<<<<< HEAD
                     // Insert the reel into the database (using oc_seller_reels table)
                     const reelQuery = `
                         INSERT INTO oc_seller_reels
+=======
+                    // Insert the reel into the database (using seller_reels table)
+                    const reelQuery = `
+                        INSERT INTO seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         (seller_id, title, description, video_url, thumbnail, status, date_added) 
                         VALUES (?, ?, ?, ?, ?, ?, NOW())
                     `;
@@ -2501,7 +2645,11 @@ const createReel = async (req, res) => {
                         
                         // Insert category association
                         const categoryQuery = `
+<<<<<<< HEAD
                             INSERT INTO oc_seller_reel_to_category
+=======
+                            INSERT INTO seller_reel_to_category 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                             (reel_id, category_id) 
                             VALUES (?, ?)
                         `;
@@ -2522,7 +2670,11 @@ const createReel = async (req, res) => {
                             // Insert product associations
                             if (selectedProducts && selectedProducts.length > 0) {
                                 const productQuery = `
+<<<<<<< HEAD
                                     INSERT INTO oc_seller_reel_product
+=======
+                                    INSERT INTO seller_reel_product 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                     (reel_id, product_id) 
                                     VALUES ?
                                 `;
@@ -2631,10 +2783,17 @@ const getInfluencerReels = async (req, res) => {
                 ir.video_url,
                 ir.thumbnail,
                 GROUP_CONCAT(irp.product_id) as product_ids
+<<<<<<< HEAD
             FROM oc_influencer_reels ir
             LEFT JOIN oc_influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
             LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
             LEFT JOIN oc_influencer_reel_product irp ON ir.reel_id = irp.reel_id
+=======
+            FROM influencer_reels ir
+            LEFT JOIN influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
+            LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
+            LEFT JOIN influencer_reel_product irp ON ir.reel_id = irp.reel_id
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE ir.influencer_id = ?
         `;
         
@@ -2723,12 +2882,21 @@ const getInfluencerReels = async (req, res) => {
                 
                 return {
                     ...reel,
+<<<<<<< HEAD
                     video_url: fullVideoUrl ? appendSAS(fullVideoUrl) : null,
                     thumbnail: fullThumbnailUrl,
                     product_ids: productIds,
                     product_count: productCount,
                     related_products_count: productCount,
                     product_names: []
+=======
+                    video_url: fullVideoUrl,
+                    thumbnail: fullThumbnailUrl,
+                    product_ids: productIds,
+                    product_count: productCount,
+                    related_products_count: productCount, // Use actual product count instead of placeholder
+                    product_names: [] // We can't get product names without cross-database join
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 };
             })
             
@@ -2972,12 +3140,21 @@ const getSellerReels = async (req, res) => {
                     
                     return {
                         ...reel,
+<<<<<<< HEAD
                         video_url: fullVideoUrl ? appendSAS(fullVideoUrl) : null,
                         thumbnail: fullThumbnailUrl,
                         product_ids: productIds,
                         product_count: productCount,
                         related_products_count: Math.min(3, Math.max(0, productCount > 0 ? 3 : 0)),
                         product_names: []
+=======
+                        video_url: fullVideoUrl,
+                        thumbnail: fullThumbnailUrl,
+                        product_ids: productIds,
+                        product_count: productCount,
+                        related_products_count: Math.min(3, Math.max(0, productCount > 0 ? 3 : 0)), // Placeholder: show up to 3 related products
+                        product_names: [] // We can't get product names without cross-database join
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                     };
                 })
                 
@@ -3033,7 +3210,11 @@ const deleteReel = async (req, res) => {
                 
                 try {
                     // First, determine if this is an influencer or seller reel by checking both tables
+<<<<<<< HEAD
                     const checkInfluencerQuery = `SELECT reel_id FROM oc_influencer_reels WHERE reel_id = ?`;
+=======
+                    const checkInfluencerQuery = `SELECT reel_id FROM influencer_reels WHERE reel_id = ?`;
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                     connection.query(checkInfluencerQuery, [id], (err, results) => {
                         if (err) {
                             return connection.rollback(() => {
@@ -3048,9 +3229,15 @@ const deleteReel = async (req, res) => {
                         }
                         
                         const isInfluencerReel = results.length > 0;
+<<<<<<< HEAD
                         const tableName = isInfluencerReel ? 'oc_influencer_reels' : 'oc_seller_reels';
                         const categoryTable = isInfluencerReel ? 'oc_influencer_reel_to_category' : 'oc_seller_reel_to_category';
                         const productTable = isInfluencerReel ? 'oc_influencer_reel_product' : 'oc_seller_reel_product';
+=======
+                        const tableName = isInfluencerReel ? 'influencer_reels' : 'seller_reels';
+                        const categoryTable = isInfluencerReel ? 'influencer_reel_to_category' : 'seller_reel_to_category';
+                        const productTable = isInfluencerReel ? 'influencer_reel_product' : 'seller_reel_product';
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         
                         // Delete product associations first
                         const deleteProductsQuery = `DELETE FROM ${productTable} WHERE reel_id = ?`;
@@ -3188,10 +3375,17 @@ const getReelById = async (req, res) => {
                 ir.date_added as created_at,
                 GROUP_CONCAT(irp.product_id) as product_ids,
                 ir.influencer_id as influencer_id
+<<<<<<< HEAD
             FROM oc_influencer_reels ir
             LEFT JOIN oc_influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
             LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
             LEFT JOIN oc_influencer_reel_product irp ON ir.reel_id = irp.reel_id
+=======
+            FROM influencer_reels ir
+            LEFT JOIN influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
+            LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
+            LEFT JOIN influencer_reel_product irp ON ir.reel_id = irp.reel_id
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE ir.reel_id = ?
             GROUP BY ir.reel_id
         `;
@@ -3282,6 +3476,7 @@ const getReelById = async (req, res) => {
                     if (reel.video_url) {
                         // Check if it's already a full URL
                         if (reel.video_url.startsWith('http')) {
+<<<<<<< HEAD
                             fullReel.video_url = appendSAS(reel.video_url);
                         } else {
                             // For relative paths like /uploads/filename, we need to ensure they're accessible
@@ -3291,6 +3486,15 @@ const getReelById = async (req, res) => {
                                     `http://localhost:3189${reel.video_url}` : 
                                     `${baseUrl}${reel.video_url}`
                             );
+=======
+                            fullReel.video_url = reel.video_url;
+                        } else {
+                            // For relative paths like /uploads/filename, we need to ensure they're accessible
+                            // The uploads are served at /uploads, not /api/studio/reels/uploads
+                            fullReel.video_url = reel.video_url.startsWith('/uploads') ? 
+                                `http://localhost:3189${reel.video_url}` : 
+                                `${baseUrl}${reel.video_url}`;
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         }
                     }
                     if (reel.thumbnail) {
@@ -3478,7 +3682,11 @@ const getReelById = async (req, res) => {
     }
 };
 
+<<<<<<< HEAD
 // Get all brand reels (combines oc_brand_reels and oc_seller_reels with brand_id)
+=======
+// Get all brand reels (combines brand_reels and seller_reels with brand_id)
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
 // Added by Vaishnavi
 const getBrandReels = async (req, res) => {
     try {
@@ -3505,7 +3713,11 @@ const getBrandReels = async (req, res) => {
                 manufacturerMap[manufacturer.id] = manufacturer.name;
             });
 
+<<<<<<< HEAD
             // Query to fetch brand reels from oc_brand_reels table
+=======
+            // Query to fetch brand reels from brand_reels table
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             const brandReelsQuery = `
                 SELECT 
                     br.id,
@@ -3524,7 +3736,11 @@ const getBrandReels = async (req, res) => {
                     br.status,
                     br.created_at,
                     'brand' as reel_type
+<<<<<<< HEAD
                 FROM oc_brand_reels br
+=======
+                FROM brand_reels br
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 LEFT JOIN oc_reel_category c ON br.category_id = c.reel_category_id
                 WHERE br.status = 'approved'
             `;
@@ -3650,28 +3866,44 @@ const getSellerDashboardStats = async (req, res) => {
             // Get total reels count
             const totalReelsQuery = `
                 SELECT COUNT(*) as totalReels
+<<<<<<< HEAD
                 FROM oc_seller_reels
+=======
+                FROM seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 WHERE seller_id = ?
             `;
             
             // Get approved reels count
             const approvedReelsQuery = `
                 SELECT COUNT(*) as approvedReels
+<<<<<<< HEAD
                 FROM oc_seller_reels
+=======
+                FROM seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 WHERE seller_id = ? AND status = 1
             `;
             
             // Get pending reels count
             const pendingReelsQuery = `
                 SELECT COUNT(*) as pendingReels
+<<<<<<< HEAD
                 FROM oc_seller_reels
+=======
+                FROM seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 WHERE seller_id = ? AND status = 0
             `;
             
             // Get rejected reels count
             const rejectedReelsQuery = `
                 SELECT COUNT(*) as rejectedReels
+<<<<<<< HEAD
                 FROM oc_seller_reels
+=======
+                FROM seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 WHERE seller_id = ? AND status = 2
             `;
             
@@ -3901,14 +4133,22 @@ const getApprovedReelsCount = async (req, res) => {
         // Get approved seller reels count
         const sellerApprovedQuery = `
             SELECT COUNT(*) as approvedReels
+<<<<<<< HEAD
             FROM oc_seller_reels
+=======
+            FROM seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 1
         `;
         
         // Get approved influencer reels count
         const influencerApprovedQuery = `
             SELECT COUNT(*) as approvedReels
+<<<<<<< HEAD
             FROM oc_influencer_reels
+=======
+            FROM influencer_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 1
         `;
         
@@ -3927,79 +4167,127 @@ const getApprovedReelsCount = async (req, res) => {
         // Get today's approved reels count for seller reels
         const todaySellerApprovedQuery = `
             SELECT COUNT(*) as todayApprovedReels
+<<<<<<< HEAD
             FROM oc_seller_reels
+=======
+            FROM seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 1 AND DATE(date_added) = CURDATE()
         `;
         
         // Get today's approved reels count for influencer reels
         const todayInfluencerApprovedQuery = `
             SELECT COUNT(*) as todayApprovedReels
+<<<<<<< HEAD
             FROM oc_influencer_reels
+=======
+            FROM influencer_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 1 AND DATE(date_added) = CURDATE()
         `;        
         // Get today's pending reels count for seller reels
         const todaySellerPendingQuery = `
             SELECT COUNT(*) as todayPendingReels
+<<<<<<< HEAD
             FROM oc_seller_reels
+=======
+            FROM seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 0 AND DATE(date_added) = CURDATE()
         `;
         
         // Get today's pending reels count for influencer reels
         const todayInfluencerPendingQuery = `
             SELECT COUNT(*) as todayPendingReels
+<<<<<<< HEAD
             FROM oc_influencer_reels
+=======
+            FROM influencer_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 0 AND DATE(date_added) = CURDATE()
         `;        
         // Get today's rejected reels count for seller reels
         const todaySellerRejectedQuery = `
             SELECT COUNT(*) as todayRejectedReels
+<<<<<<< HEAD
             FROM oc_seller_reels
+=======
+            FROM seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 2 AND DATE(date_added) = CURDATE()
         `;
         
         // Get today's rejected reels count for influencer reels
         const todayInfluencerRejectedQuery = `
             SELECT COUNT(*) as todayRejectedReels
+<<<<<<< HEAD
             FROM oc_influencer_reels
+=======
+            FROM influencer_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 2 AND DATE(date_added) = CURDATE()
         `;        
         // Get total reels count for seller reels
         const totalSellerReelsQuery = `
             SELECT COUNT(*) as totalReels
+<<<<<<< HEAD
             FROM oc_seller_reels
+=======
+            FROM seller_reels
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         `;
         
         // Get total reels count for influencer reels
         const totalInfluencerReelsQuery = `
             SELECT COUNT(*) as totalReels
+<<<<<<< HEAD
             FROM oc_influencer_reels
+=======
+            FROM influencer_reels
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         `;
         
         // Get pending reels count for seller reels
         const pendingSellerReelsQuery = `
             SELECT COUNT(*) as pendingReels
+<<<<<<< HEAD
             FROM oc_seller_reels
+=======
+            FROM seller_reels
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 0
         `;
         
         // Get pending reels count for influencer reels
         const pendingInfluencerReelsQuery = `
             SELECT COUNT(*) as pendingReels
+<<<<<<< HEAD
             FROM oc_influencer_reels
+=======
+            FROM influencer_reels
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 0
         `;
         
         // Get rejected reels count for seller reels
         const rejectedSellerReelsQuery = `
             SELECT COUNT(*) as rejectedReels
+<<<<<<< HEAD
             FROM oc_seller_reels
+=======
+            FROM seller_reels
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 2
         `;
         
         // Get rejected reels count for influencer reels
         const rejectedInfluencerReelsQuery = `
             SELECT COUNT(*) as rejectedReels
+<<<<<<< HEAD
             FROM oc_influencer_reels
+=======
+            FROM influencer_reels
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 2
         `;
         
@@ -4244,7 +4532,11 @@ const approveSellerReel = async (req, res) => {
         
         // Update the status to approved (1)
         const query = `
+<<<<<<< HEAD
             UPDATE oc_seller_reels
+=======
+            UPDATE seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             SET status = 1, date_modified = CURRENT_TIMESTAMP 
             WHERE reel_id = ?
         `;
@@ -4294,7 +4586,11 @@ const rejectSellerReel = async (req, res) => {
         
         // Update the status to rejected (2)
         const query = `
+<<<<<<< HEAD
             UPDATE oc_seller_reels
+=======
+            UPDATE seller_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             SET status = 2, date_modified = CURRENT_TIMESTAMP 
             WHERE reel_id = ?
         `;
@@ -4494,7 +4790,11 @@ const approveInfluencerReel = async (req, res) => {
         }
         
         // Build query to update influencer reel status to approved (1)
+<<<<<<< HEAD
         const query = `UPDATE oc_influencer_reels SET status = 1 WHERE reel_id = ?`;
+=======
+        const query = `UPDATE influencer_reels SET status = 1 WHERE reel_id = ?`;
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         
         db.query(query, [id], (err, results) => {
             if (err) {
@@ -4543,7 +4843,11 @@ const rejectInfluencerReel = async (req, res) => {
         }
         
         // Build query to update influencer reel status to rejected (2)
+<<<<<<< HEAD
         const query = `UPDATE oc_influencer_reels SET status = 2 WHERE reel_id = ?`;
+=======
+        const query = `UPDATE influencer_reels SET status = 2 WHERE reel_id = ?`;
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         
         db.query(query, [id], (err, results) => {
             if (err) {
@@ -4625,7 +4929,11 @@ const getAllPendingSellerReels = async (req, res) => {
 const getAllApprovedSellerReels = async (req, res) => {
     try {
         // We need to join tables from two different databases
+<<<<<<< HEAD
         // oc_seller_reels is in the main db (ipshopy_reels)
+=======
+        // seller_reels is in the main db (ipshopy_reels)
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         // oc_sellers is in dbSagar (sagar database)
         const query = `
             SELECT 
@@ -4788,6 +5096,7 @@ const uploadBrandReel = async (req, res) => {
             let videoUrl = null;
             if (videoFile) {
                 try {
+<<<<<<< HEAD
                     videoUrl = await uploadToAzure(
                         videoFile.path,
                         videoFile.originalname || videoFile.filename,
@@ -4803,6 +5112,13 @@ const uploadBrandReel = async (req, res) => {
                     try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
                     return res.status(502).json({ success: false, message: 'Azure upload failed' });
                 }
+=======
+                    videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename);
+                } catch (e) {
+                    console.error('Azure upload failed:', e && e.message ? e.message : e)
+                }
+                try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             }
 
             const thumbnailFile = req.files.thumbnail ? req.files.thumbnail[0] : null;
@@ -4829,7 +5145,11 @@ const uploadBrandReel = async (req, res) => {
 
             // Insert the brand reel into the database
             const brandReelQuery = `
+<<<<<<< HEAD
                 INSERT INTO oc_brand_reels
+=======
+                INSERT INTO brand_reels 
+>>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 (brand_id, category_id, product_id, title, description, video_url, thumbnail_url, views, likes, comments, status, created_at) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'approved', NOW())
             `;
