@@ -5,3 +5,24 @@ storage/
 *.log
 .DS_Store
 
+# Media files
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.mp4
+*.mov
+*.avi
+*.mp3
+*.wav
+
+# Archives
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+
+# Database
+Database/
