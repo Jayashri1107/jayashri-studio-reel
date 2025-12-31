@@ -107,8 +107,9 @@ const isLocalUrl = (url) => {
     if (url.startsWith('/uploads/') || url.startsWith('/uploads')) return true;
     if (url.startsWith('./uploads/') || url.startsWith('./uploads')) return true;
     // Check for localhost URLs (but not Azure URLs)
-    if (url.includes('localhost') && !isAzureBlobUrl(url)) return true;
-    if (url.includes('127.0.0.1') && !isAzureBlobUrl(url)) return true;
+    // if (url.includes('localhost') && !isAzureBlobUrl(url)) return true;
+    if (url.includes('studio-api.ipshopy.com') && !isAzureBlobUrl(url)) return true;
+    // if (url.includes('127.0.0.1') && !isAzureBlobUrl(url)) return true;
     // Check if it's a relative path (starts with / but not http)
     if (url.startsWith('/') && !url.startsWith('http')) return true;
     return false;
@@ -4023,7 +4024,8 @@ const getReelById = async (req, res) => {
                                     // For relative paths like /uploads/filename, we need to ensure they're accessible
                                     // The uploads are served at /uploads, not /api/studio/reels/uploads
                                     fullReel.thumbnail = reel.thumbnail.startsWith('/uploads') ? 
-                                        `http://localhost:3189${reel.thumbnail}` : 
+                                        // `http://localhost:3189${reel.thumbnail}` : 
+                                        `https://studio-api.ipshopy.com${reel.thumbnail}` : 
                                         `${baseUrl}${reel.thumbnail}`;
                                 }
                             }

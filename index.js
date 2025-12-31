@@ -40,7 +40,8 @@ const resolveSasToken = () => {
 // ✅ CORS (MUST BE VERY FIRST)
 // ================================
 app.use(cors({
-    origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"],
+    origin: ["https://studio-api.ipshopy.com", "https://studio.ipshopy.com", "https://ipshopy.com"],
+    // origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"],
     credentials: true
 }));
 
@@ -204,7 +205,8 @@ const validateAzureSAS = () => {
 
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ Server running on port ${PORT}`);
-    console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+    // console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+    console.log(`🔗 Health check: https://studio-api.ipshopy.com/health`);
     console.log('\n=== Azure Configuration Check ===');
     validateAzureSAS();
     console.log('================================\n');
