@@ -75,7 +75,7 @@ const SubmitRegistration = async (req, res) => {
                             
                             // Create/update approval record in reels-ipshopy database
                             const approvalQuery = `
-                                INSERT INTO seller_approvals (
+                                INSERT INTO oc_seller_approvals (
                                     vendor_id, email, mobile, status, created_at
                                 ) VALUES (?, ?, ?, 'pending', NOW())
                                 ON DUPLICATE KEY UPDATE status = 'pending', updated_at = NOW()
@@ -128,7 +128,7 @@ const SubmitRegistration = async (req, res) => {
 
                     // Create approval record in reels-ipshopy database
                     const approvalQuery = `
-                        INSERT INTO seller_approvals (
+                        INSERT INTO oc_seller_approvals (
                             vendor_id, email, mobile, status, created_at
                         ) VALUES (?, ?, ?, 'pending', NOW())
                     `;

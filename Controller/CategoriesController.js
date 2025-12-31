@@ -69,14 +69,14 @@ const getCategoryById = (req, res) => {
         
         res.status(200).json({
             success: true,
-            data: mappedCategory
+            data: [mappedCategory]
         });
     });
 };
 
 // Create a new category
 const createCategory = (req, res) => {
-    const { name, description } = req.body;
+    const { name, description, sort_order, status } = req.body;
     
     // Validation
     if (!name || name.trim() === '') {
@@ -94,8 +94,8 @@ const createCategory = (req, res) => {
     const values = [
         name.trim(),
         description || null,
-        0, // sort_order
-        1  // status (active)
+        sort_order !== undefined ? parseInt(sort_order) : 0,
+        status !== undefined ? parseInt(status) : 1
     ];
     
     db.query(query, values, (err, results) => {
@@ -123,7 +123,7 @@ const createCategory = (req, res) => {
 // Update a category
 const updateCategory = (req, res) => {
     const { id } = req.params;
-    const { name, description, is_active, sort_order } = req.body;
+    const { name, description, is_active, status, sort_order } = req.body;
     
     // Validation
     if (!name || name.trim() === '') {
@@ -132,6 +132,9 @@ const updateCategory = (req, res) => {
             message: 'Category name is required' 
         });
     }
+    
+    // Use status if provided, otherwise use is_active, default to 1
+    const categoryStatus = status !== undefined ? parseInt(status) : (is_active !== undefined ? parseInt(is_active) : 1);
     
     const query = `
         UPDATE oc_reel_category 
@@ -142,8 +145,8 @@ const updateCategory = (req, res) => {
     const values = [
         name.trim(),
         description || null,
-        sort_order !== undefined ? sort_order : 0,
-        is_active !== undefined ? is_active : 1,
+        sort_order !== undefined ? parseInt(sort_order) : 0,
+        categoryStatus,
         id
     ];
     

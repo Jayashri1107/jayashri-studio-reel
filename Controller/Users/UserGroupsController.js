@@ -86,8 +86,21 @@ const AddUserGroup = async (req, res) => {
 // Get all user groups
 const GetUserGroups = async (req, res) => {
     try {
-        // Since we're doing hard deletes now, we don't need to filter by is_active
-        const query = 'SELECT * FROM oc_user_groups ORDER BY name';
+        // Query to get user groups with user count from oc_admin_user
+        const query = `
+            SELECT 
+                ug.*,
+                COALESCE(user_counts.user_count, 0) as users
+            FROM oc_user_groups ug
+            LEFT JOIN (
+                SELECT 
+                    user_group_id,
+                    COUNT(*) as user_count
+                FROM oc_admin_user
+                GROUP BY user_group_id
+            ) as user_counts ON ug.user_group_id = user_counts.user_group_id
+            ORDER BY ug.name
+        `;
         
         db.query(query, (err, results) => {
             if (err) {

@@ -3,6 +3,14 @@ const db = require('../../Config/db');
 const dbSagar = require('../../Config/db_sagar');
 const nodemailer = require('nodemailer');
 const { generateToken, generateResetToken, verifyToken } = require('../../Utils/jwtUtils');
+const {
+    sendInfluencerApprovalNotification,
+    sendInfluencerRejectionNotification,
+    sendInfluencerPendingNotification,
+    sendSellerApprovalNotification,
+    sendSellerRejectionNotification,
+    sendSellerPendingNotification
+} = require('../../Services/Notifications/notificationService');
 
 let mailTransporter;
 const getMailTransporter = async () => {
@@ -250,8 +258,8 @@ const sellerLoginWithPassword = async (req, res) => {
                 });
             }
             
-            // Password matches, now check if seller is approved in seller_approvals table
-            const vendorQuery = `SELECT status FROM seller_approvals WHERE vendor_id = ?`;
+            // Password matches, now check if seller is approved in oc_seller_approvals table
+            const vendorQuery = `SELECT status FROM oc_seller_approvals WHERE vendor_id = ?`;
             db.query(vendorQuery, [seller.vendor_id], (vendorErr, vendorResults) => {
                 if (vendorErr) {
                     console.error('Error checking vendor approval:', vendorErr);
@@ -285,6 +293,7 @@ const sellerLoginWithPassword = async (req, res) => {
                 // Generate JWT token
                 const token = generateToken({
                     id: seller.id,
+                    vendor_id: seller.vendor_id,
                     email: seller.email,
                     role: 'seller'
                 });
@@ -392,7 +401,7 @@ const applyForInfluencer = async (req, res) => {
                 platform,
                 accountLink,
                 hashedPassword
-            ], (err, result) => {
+            ], async (err, result) => {
                 if (err) {
                     console.error('Error creating influencer:', err);
                     return res.status(500).json({ 
@@ -412,6 +421,24 @@ const applyForInfluencer = async (req, res) => {
                     account_link: accountLink,
                     role: 'influencer'
                 };
+                
+                // Send WhatsApp approval notification (status = 1 means auto-approved)
+                try {
+                    console.log('Sending WhatsApp approval notification to new influencer:', {
+                        id: influencerData.id,
+                        name: influencerData.firstname,
+                        phone: influencerData.telephone
+                    });
+                    const notificationResult = await sendInfluencerApprovalNotification(influencerData);
+                    if (notificationResult.success) {
+                        console.log('WhatsApp approval notification sent successfully to new influencer:', influencerData.telephone);
+                    } else {
+                        console.error('WhatsApp approval notification failed for new influencer:', notificationResult.message || notificationResult.error);
+                    }
+                } catch (notificationError) {
+                    // Log notification error but don't fail the request
+                    console.error('Error sending approval notification:', notificationError.message || notificationError);
+                }
                 
                 return res.status(201).json({
                     success: true,
@@ -777,7 +804,7 @@ const applyForInfluencerReels = async (req, res) => {
                 platformsJoined || primaryPlatform,
                 linksJoined || primaryLink,
                 hashedPassword
-            ], (err, result) => {
+            ], async (err, result) => {
                 if (err) {
                     console.error('Error creating influencer:', err);
                     return res.status(500).json({ 
@@ -821,6 +848,24 @@ const applyForInfluencerReels = async (req, res) => {
                     account_link: primaryLink,
                     role: 'influencer'
                 };
+                
+                // Send WhatsApp notification for pending application
+                try {
+                    console.log('Sending WhatsApp pending notification to new influencer:', {
+                        id: influencerData.id,
+                        name: influencerData.firstname,
+                        phone: influencerData.telephone
+                    });
+                    const notificationResult = await sendInfluencerPendingNotification(influencerData);
+                    if (notificationResult.success) {
+                        console.log('WhatsApp pending notification sent successfully to new influencer:', influencerData.telephone);
+                    } else {
+                        console.error('WhatsApp pending notification failed for new influencer:', notificationResult.message || notificationResult.error);
+                    }
+                } catch (notificationError) {
+                    // Log notification error but don't fail the request
+                    console.error('Error sending pending notification:', notificationError.message || notificationError);
+                }
                 
                 return res.status(201).json({
                     success: true,
@@ -998,7 +1043,7 @@ const registerSellerForReels = async (req, res) => {
                 email,
                 mobile,
                 hashedPassword
-            ], (err, result) => {
+            ], async (err, result) => {
                 if (err) {
                     console.error('Error creating studio seller:', err);
                     return res.status(500).json({ 
@@ -1016,6 +1061,25 @@ const registerSellerForReels = async (req, res) => {
                     email: email,
                     telephone: mobile
                 };
+                
+                // Send WhatsApp notification for pending application
+                try {
+                    console.log('Sending WhatsApp pending notification to new seller:', {
+                        id: sellerData.id,
+                        vendorId: sellerData.vendor_id,
+                        name: sellerData.firstname,
+                        phone: sellerData.telephone
+                    });
+                    const notificationResult = await sendSellerPendingNotification(sellerData);
+                    if (notificationResult.success) {
+                        console.log('WhatsApp pending notification sent successfully to new seller:', sellerData.telephone);
+                    } else {
+                        console.error('WhatsApp pending notification failed for new seller:', notificationResult.message || notificationResult.error);
+                    }
+                } catch (notificationError) {
+                    // Log notification error but don't fail the request
+                    console.error('Error sending pending notification:', notificationError.message || notificationError);
+                }
                 
                 return res.status(201).json({
                     success: true,
@@ -1083,6 +1147,11 @@ const getAllInfluencerApplications = async (req, res) => {
 
 // Approve an influencer application
 const approveInfluencer = async (req, res) => {
+    console.log('=== APPROVE INFLUENCER ENDPOINT CALLED ===');
+    console.log('Request params:', req.params);
+    console.log('Request body:', req.body);
+    console.log('Request method:', req.method);
+    
     const { id } = req.params;
     
     if (!id) {
@@ -1093,32 +1162,74 @@ const approveInfluencer = async (req, res) => {
     }
     
     try {
-        const query = `
-            UPDATE oc_influencers 
-            SET status = 1, approved_at = NOW()
-            WHERE id = ?
-        `;
+        // First, fetch influencer data before updating
+        const fetchQuery = `SELECT id, firstname, lastname, email, telephone FROM oc_influencers WHERE id = ?`;
         
-        db.query(query, [id], (err, result) => {
-            if (err) {
-                console.error('Error approving influencer:', err);
+        db.query(fetchQuery, [id], async (fetchErr, fetchResults) => {
+            if (fetchErr) {
+                console.error('Error fetching influencer data:', fetchErr);
                 return res.status(500).json({ 
                     success: false, 
-                    message: 'Error approving influencer',
-                    error: err.message 
+                    message: 'Error fetching influencer information',
+                    error: fetchErr.message 
                 });
             }
             
-            if (result.affectedRows === 0) {
+            if (fetchResults.length === 0) {
                 return res.status(404).json({ 
                     success: false, 
                     message: 'Influencer not found' 
                 });
             }
             
-            return res.status(200).json({
-                success: true,
-                message: 'Influencer approved successfully'
+            const influencerData = fetchResults[0];
+            
+            // Update influencer status
+            const updateQuery = `
+                UPDATE oc_influencers 
+                SET status = 1, approved_at = NOW()
+                WHERE id = ?
+            `;
+            
+            db.query(updateQuery, [id], async (err, result) => {
+                if (err) {
+                    console.error('Error approving influencer:', err);
+                    return res.status(500).json({ 
+                        success: false, 
+                        message: 'Error approving influencer',
+                        error: err.message 
+                    });
+                }
+                
+                if (result.affectedRows === 0) {
+                    return res.status(404).json({ 
+                        success: false, 
+                        message: 'Influencer not found' 
+                    });
+                }
+                
+                // Send WhatsApp notification
+                try {
+                    console.log('Sending WhatsApp approval notification to influencer:', {
+                        id: influencerData.id,
+                        name: influencerData.firstname,
+                        phone: influencerData.telephone
+                    });
+                    const notificationResult = await sendInfluencerApprovalNotification(influencerData);
+                    if (notificationResult.success) {
+                        console.log('WhatsApp approval notification sent successfully to influencer:', influencerData.telephone);
+                    } else {
+                        console.error('WhatsApp approval notification failed for influencer:', notificationResult.message || notificationResult.error);
+                    }
+                } catch (notificationError) {
+                    // Log notification error but don't fail the request
+                    console.error('Error sending approval notification:', notificationError.message || notificationError);
+                }
+                
+                return res.status(200).json({
+                    success: true,
+                    message: 'Influencer approved successfully'
+                });
             });
         });
     } catch (error) {
@@ -1133,6 +1244,11 @@ const approveInfluencer = async (req, res) => {
 
 // Reject an influencer application
 const rejectInfluencer = async (req, res) => {
+    console.log('=== REJECT INFLUENCER ENDPOINT CALLED ===');
+    console.log('Request params:', req.params);
+    console.log('Request body:', req.body);
+    console.log('Request method:', req.method);
+    
     const { id } = req.params;
     
     if (!id) {
@@ -1143,18 +1259,177 @@ const rejectInfluencer = async (req, res) => {
     }
     
     try {
+        // First, fetch influencer data before updating
+        const fetchQuery = `SELECT id, firstname, lastname, email, telephone FROM oc_influencers WHERE id = ?`;
+        
+        db.query(fetchQuery, [id], async (fetchErr, fetchResults) => {
+            if (fetchErr) {
+                console.error('Error fetching influencer data:', fetchErr);
+                return res.status(500).json({ 
+                    success: false, 
+                    message: 'Error fetching influencer information',
+                    error: fetchErr.message 
+                });
+            }
+            
+            if (fetchResults.length === 0) {
+                return res.status(404).json({ 
+                    success: false, 
+                    message: 'Influencer not found' 
+                });
+            }
+            
+            const influencerData = fetchResults[0];
+            
+            // Update influencer status
+            const updateQuery = `
+                UPDATE oc_influencers 
+                SET status = 2, rejected_at = NOW()
+                WHERE id = ?
+            `;
+            
+            db.query(updateQuery, [id], async (err, result) => {
+                if (err) {
+                    console.error('Error rejecting influencer:', err);
+                    return res.status(500).json({ 
+                        success: false, 
+                        message: 'Error rejecting influencer',
+                        error: err.message 
+                    });
+                }
+                
+                if (result.affectedRows === 0) {
+                    return res.status(404).json({ 
+                        success: false, 
+                        message: 'Influencer not found' 
+                    });
+                }
+                
+                // Send WhatsApp notification
+                try {
+                    console.log('Sending WhatsApp rejection notification to influencer:', {
+                        id: influencerData.id,
+                        name: influencerData.firstname,
+                        phone: influencerData.telephone
+                    });
+                    const notificationResult = await sendInfluencerRejectionNotification(influencerData);
+                    if (notificationResult.success) {
+                        console.log('WhatsApp rejection notification sent successfully to influencer:', influencerData.telephone);
+                    } else {
+                        console.error('WhatsApp rejection notification failed for influencer:', notificationResult.message || notificationResult.error);
+                    }
+                } catch (notificationError) {
+                    // Log notification error but don't fail the request
+                    console.error('Error sending rejection notification:', notificationError.message || notificationError);
+                }
+                
+                return res.status(200).json({
+                    success: true,
+                    message: 'Influencer rejected successfully'
+                });
+            });
+        });
+    } catch (error) {
+        console.error('Reject influencer error:', error);
+        return res.status(500).json({ 
+            success: false, 
+            message: 'Failed to reject influencer',
+            error: error.message 
+        });
+    }
+};
+
+// Update influencer details
+const updateInfluencer = async (req, res) => {
+    const { id } = req.params;
+    const { firstname, lastname, email, telephone, platform, account_link, status } = req.body;
+    
+    if (!id) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Influencer ID is required' 
+        });
+    }
+    
+    // Validation
+    if (!firstname || !lastname) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'First name and last name are required' 
+        });
+    }
+    
+    if (!email) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Email is required' 
+        });
+    }
+    
+    try {
+        // Build update query dynamically based on provided fields
+        const updateFields = [];
+        const updateValues = [];
+        
+        if (firstname) {
+            updateFields.push('firstname = ?');
+            updateValues.push(firstname.trim());
+        }
+        
+        if (lastname) {
+            updateFields.push('lastname = ?');
+            updateValues.push(lastname.trim());
+        }
+        
+        if (email) {
+            updateFields.push('email = ?');
+            updateValues.push(email.trim());
+        }
+        
+        if (telephone !== undefined) {
+            updateFields.push('telephone = ?');
+            updateValues.push(telephone ? telephone.trim() : null);
+        }
+        
+        if (platform !== undefined) {
+            updateFields.push('platform = ?');
+            updateValues.push(platform ? platform.trim() : null);
+        }
+        
+        if (account_link !== undefined) {
+            updateFields.push('account_link = ?');
+            updateValues.push(account_link ? account_link.trim() : null);
+        }
+        
+        if (status !== undefined) {
+            updateFields.push('status = ?');
+            updateValues.push(status);
+        }
+        
+        // Always update date_modified
+        updateFields.push('date_modified = NOW()');
+        
+        if (updateFields.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'No fields to update' 
+            });
+        }
+        
+        updateValues.push(id);
+        
         const query = `
             UPDATE oc_influencers 
-            SET status = 2, rejected_at = NOW()
+            SET ${updateFields.join(', ')}
             WHERE id = ?
         `;
         
-        db.query(query, [id], (err, result) => {
+        db.query(query, updateValues, (err, result) => {
             if (err) {
-                console.error('Error rejecting influencer:', err);
+                console.error('Error updating influencer:', err);
                 return res.status(500).json({ 
                     success: false, 
-                    message: 'Error rejecting influencer',
+                    message: 'Error updating influencer',
                     error: err.message 
                 });
             }
@@ -1168,14 +1443,14 @@ const rejectInfluencer = async (req, res) => {
             
             return res.status(200).json({
                 success: true,
-                message: 'Influencer rejected successfully'
+                message: 'Influencer updated successfully'
             });
         });
     } catch (error) {
-        console.error('Reject influencer error:', error);
+        console.error('Update influencer error:', error);
         return res.status(500).json({ 
             success: false, 
-            message: 'Failed to reject influencer',
+            message: 'Failed to update influencer',
             error: error.message 
         });
     }
@@ -1257,6 +1532,7 @@ module.exports = {
     getAllInfluencerApplications,
     approveInfluencer,
     rejectInfluencer,
+    updateInfluencer,
     // New: password reset endpoints
     requestSellerPasswordReset,
     requestInfluencerPasswordReset,

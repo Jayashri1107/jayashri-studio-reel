@@ -7,9 +7,11 @@
     "start": "nodemon index.js",
     "dev": "nodemon index.js",
     "setup-db": "node Database/setup-database.js",
+    "add-missing-tables": "node Database/add-missing-tables.js",
     "test-sync": "node Scripts/test-data-sync.js"
   },
   "dependencies": {
+    "axios": "^1.13.2",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
     "body-parser": "^1.20.2",

@@ -3,90 +3,443 @@ const dbSagar = require('../../Config/db_sagar')
 const fs = require('fs')
 const http = require('http')
 const https = require('https')
+const FormData = require('form-data')
 
-const AZURE_UPLOAD_URL = process.env.AZURE_UPLOAD_URL || 'https://reels-func.azurewebsites.net/api/UploadReel?code=LsbfgoydZjIq23O2qFHcS5xCEab3_incYmQAGSk_c2JnAzFun_DN_Q=='
+const AZURE_UPLOAD_URL = process.env.AZURE_UPLOAD_URL
+    || (process.env.AZURE_UPLOAD_BASE_URL ? `${process.env.AZURE_UPLOAD_BASE_URL.replace(/\/$/, '')}/api/UploadReel` : '')
+    || 'https://reels-function.azurewebsites.net/api/reels/upload';
 
-<<<<<<< HEAD
+const AZURE_REELS_ENDPOINTS = {
+  UPLOAD: process.env.AZURE_UPLOAD_URL || 'https://reels-function.azurewebsites.net/api/reels/upload',
+  EDIT: process.env.AZURE_REELS_EDIT_URL || 'https://reels-function.azurewebsites.net/api/reels/edit',
+  DELETE: process.env.AZURE_REELS_DELETE_URL || 'https://reels-function.azurewebsites.net/api/reels/delete?code=jIItzrj8IZ2gnytPJrgyMfuQGtpG3p4LS1u18TDXL9eyAzFuvrVG8Q=='
+};
+let SAS_WARNING_SHOWN = false;
+const AZURE_SAS_DISABLED = String(process.env.AZURE_SAS_DISABLED || '').toLowerCase() === 'true';
+
+const SAS_ENV_KEYS = [
+    'AZURE_BLOB_SAS_QUERY',
+    'AZURE_BLOB_SAS_TOKEN',
+    'AZURE_STORAGE_SAS',
+    'AZURE_SAS_TOKEN'
+];
+
+const resolveSasToken = () => {
+    for (const key of SAS_ENV_KEYS) {
+        const value = process.env[key];
+        if (value && String(value).trim()) {
+            return { token: String(value).trim(), source: key };
+        }
+    }
+    return { token: '', source: '' };
+};
+
+// Helper function to strip SAS token from URL (for saving to database)
+const stripSASToken = (url) => {
+    if (!url || !url.trim()) return url;
+    // Remove everything after ? (SAS token parameters)
+    if (url.includes('?')) {
+        return url.split('?')[0];
+    }
+    return url;
+};
+
+// Helper function to validate and check SAS token expiration
+const validateSASToken = (sasToken) => {
+    if (!sasToken || !sasToken.trim()) {
+        return { valid: false, error: 'SAS token is empty or not set' };
+    }
+    
+    const cleanSas = String(sasToken).trim().replace(/^\?/, '');
+    
+    // Check if token has required parameters
+    if (!cleanSas.includes('sv=') && !cleanSas.includes('sig=')) {
+        return { valid: false, error: 'SAS token format invalid - missing sv= or sig= parameters' };
+    }
+    
+    // Check expiration date (se= parameter)
+    const expiryMatch = cleanSas.match(/se=([^&]+)/);
+    if (expiryMatch) {
+        try {
+            const expiryDate = new Date(decodeURIComponent(expiryMatch[1]));
+            const now = new Date();
+            
+            if (expiryDate < now) {
+                return { 
+                    valid: false, 
+                    error: `SAS token has EXPIRED. Expiry date: ${expiryDate.toISOString()}. Please generate a new token.`,
+                    expired: true,
+                    expiryDate: expiryDate
+                };
+            }
+            
+            // Warn if token expires within 30 days
+            const daysUntilExpiry = Math.floor((expiryDate - now) / (1000 * 60 * 60 * 24));
+            if (daysUntilExpiry < 30) {
+                return { 
+                    valid: true, 
+                    warning: `SAS token expires in ${daysUntilExpiry} days (${expiryDate.toISOString()}). Consider renewing it.`,
+                    expiryDate: expiryDate
+                };
+            }
+            
+            return { valid: true, expiryDate: expiryDate };
+        } catch (e) {
+            console.warn('[validateSASToken] Could not parse expiry date:', e);
+        }
+    }
+    
+    return { valid: true };
+};
+
+// Helper function to check if URL is an Azure blob storage URL
+const isAzureBlobUrl = (url) => {
+    if (!url || !url.trim()) return false;
+    return url.includes('blob.core.windows.net') || 
+           url.includes('reelsstorage.blob.core.windows.net') ||
+           url.includes('.blob.core.windows.net');
+};
+
+// Helper function to check if URL is a local URL (doesn't need SAS token)
+const isLocalUrl = (url) => {
+    if (!url || !url.trim()) return false;
+    // Check for local paths
+    if (url.startsWith('/uploads/') || url.startsWith('/uploads')) return true;
+    if (url.startsWith('./uploads/') || url.startsWith('./uploads')) return true;
+    // Check for localhost URLs (but not Azure URLs)
+    if (url.includes('localhost') && !isAzureBlobUrl(url)) return true;
+    if (url.includes('127.0.0.1') && !isAzureBlobUrl(url)) return true;
+    // Check if it's a relative path (starts with / but not http)
+    if (url.startsWith('/') && !url.startsWith('http')) return true;
+    return false;
+};
+
+// Enhanced version of appendSAS that provides better error handling
 const appendSAS = (url) => {
     try {
-        const sas = process.env.AZURE_BLOB_SAS_QUERY;
-        if (!sas || !url) return url;
-        const cleanSas = String(sas).replace(/^\?/, '');
-        if (url.includes('?')) return `${url}&${cleanSas}`;
-        return `${url}?${cleanSas}`;
-    } catch (_) {
+        if (!url || !url.trim()) {
+            console.warn('[appendSAS] Empty or invalid URL provided');
+            return url;
+        }
+
+        if (AZURE_SAS_DISABLED) {
+            console.log('[appendSAS] SAS disabled via AZURE_SAS_DISABLED=true; returning URL as-is.');
+            return url;
+        }
+        
+        // Check if URL is local - local URLs don't need SAS tokens
+        if (isLocalUrl(url)) {
+            // For local URLs, just return as-is (no SAS token needed)
+            return url;
+        }
+        
+        // Check if URL is an Azure blob storage URL
+        const isAzureUrl = isAzureBlobUrl(url);
+        
+        // If URL already has SAS token, return as-is (but verify it's valid)
+        if (url.includes('sig=') || url.includes('sv=')) {
+            if (isAzureUrl) {
+                console.log('[appendSAS] Azure URL already contains SAS token');
+            }
+            return url;
+        }
+        
+        // Only Azure URLs need SAS tokens
+        if (!isAzureUrl) {
+            // Not an Azure URL and not local - return as-is (might be external URL)
+            return url;
+        }
+        
+        // For Azure blob URLs, SAS token is REQUIRED
+        const { token: sas, source } = resolveSasToken();
+        if (!sas || !sas.trim()) {
+            if (!SAS_WARNING_SHOWN) {
+                SAS_WARNING_SHOWN = true;
+                console.error('[appendSAS] ERROR: Azure blob URL requires SAS token but no SAS env var was found.');
+                console.error('[appendSAS] URL:', url.substring(0, 150));
+                console.error('[appendSAS] Checked env keys:', SAS_ENV_KEYS.join(', '));
+                console.error('[appendSAS] Please add your Azure SAS query string (e.g. ?sv=...&sig=...) to one of the above env vars.');
+            }
+            // Still return the URL, but it will likely fail to load
+            return url;
+        }
+        
+        // Validate SAS token (check expiration, format, etc.)
+        const validation = validateSASToken(sas);
+        if (!validation.valid) {
+            console.error('[appendSAS] ERROR: SAS token validation failed:', validation.error);
+            if (validation.expired) {
+                console.error('[appendSAS] CRITICAL: SAS token has EXPIRED! Videos will not load until you generate a new token.');
+                console.error('[appendSAS] Please generate a new SAS token in Azure Portal and update your .env file');
+            }
+            // Still try to use it, but log the error
+        } else if (validation.warning) {
+            console.warn('[appendSAS] WARNING:', validation.warning);
+        }
+        
+        const cleanSas = String(sas).trim().replace(/^\?/, '');
+        
+        const finalUrl = url.includes('?') ? `${url}&${cleanSas}` : `${url}?${cleanSas}`;
+        
+        // Verify the final URL has the SAS token
+        if (!finalUrl.includes('sig=') && !finalUrl.includes('sv=')) {
+            console.error('[appendSAS] ERROR: Failed to append valid SAS token. Check AZURE_BLOB_SAS_QUERY format.');
+            console.error('[appendSAS] SAS token should contain: ?sv=...&sig=...');
+        } else {
+            console.log('[appendSAS] Successfully appended SAS token.', {
+                source,
+                urlLength: finalUrl.length,
+                sasLength: cleanSas.length
+            });
+        }
+        
+        return finalUrl;
+    } catch (error) {
+        console.error('[appendSAS] Error appending SAS token:', error);
+        console.error('[appendSAS] Original URL:', url?.substring(0, 100));
         return url;
     }
 }
 
-const uploadToAzure = (filePath, filename, mimetype = 'application/octet-stream') => {
+
+
+// Azure Functions Integration
+const uploadToAzureDirect = (formData) => {
     return new Promise((resolve, reject) => {
         try {
-            const urlObj = new URL(AZURE_UPLOAD_URL)
-            const boundary = '----NodeBoundary' + Math.random().toString(16).slice(2)
+            const urlObj = new URL(AZURE_REELS_ENDPOINTS.UPLOAD);
+
             const headers = {
-                'Content-Type': `multipart/form-data; boundary=${boundary}`,
-                'x-filename': filename || 'upload.mp4'
-            }
-            const functionKey = process.env.AZURE_FUNCTION_KEY
-            if (functionKey) headers['x-functions-key'] = functionKey
-            if (filename && !urlObj.searchParams.has('filename')) {
-                urlObj.searchParams.append('filename', filename)
-            }
-=======
-const uploadToAzure = (filePath, filename) => {
-    return new Promise((resolve, reject) => {
-        try {
-            const urlObj = new URL(AZURE_UPLOAD_URL)
-            const headers = { 'x-filename': filename || 'upload.bin' }
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
+                // Don't set Content-Type header when using FormData
+                // It will be set automatically with the correct boundary
+            };
+
             const options = {
                 method: 'POST',
                 hostname: urlObj.hostname,
                 path: urlObj.pathname + urlObj.search,
                 headers,
-            }
-            const client = urlObj.protocol === 'https:' ? https : http
+            };
+
+            const client = urlObj.protocol === 'https:' ? https : http;
             const req = client.request(options, (res) => {
-                const chunks = []
-                res.on('data', (d) => chunks.push(d))
+                const chunks = [];
+                res.on('data', (d) => chunks.push(d));
                 res.on('end', () => {
-                    const body = Buffer.concat(chunks).toString('utf8')
+                    const body = Buffer.concat(chunks).toString('utf8');
                     if (res.statusCode >= 200 && res.statusCode < 300) {
-                        let data = body
-                        try { data = JSON.parse(body) } catch (_) {}
-                        const url = typeof data === 'string' ? data : (data && (data.url || data.videoUrl || data.video_url || data.location || data.blobUrl))
-                        resolve(url || body)
+                        try {
+                            const json = JSON.parse(body);
+                            resolve(json);
+                        } catch {
+                            resolve({ success: true, message: body, url: body });
+                        }
                     } else {
-                        reject(new Error(body || String(res.statusCode)))
+                        reject(new Error(body || String(res.statusCode)));
                     }
-                })
-            })
-            req.on('error', (err) => reject(err))
-<<<<<<< HEAD
+                });
+            });
 
-            const CRLF = '\r\n'
-            const partFileHeader = Buffer.from(
-                `--${boundary}${CRLF}` +
-                `Content-Disposition: form-data; name="file"; filename="${filename || 'upload.mp4'}"${CRLF}` +
-                `Content-Type: ${mimetype}${CRLF}${CRLF}`
-            )
-            const epilogue = Buffer.from(`${CRLF}--${boundary}--${CRLF}`)
+            req.on('error', reject);
 
-            const stream = fs.createReadStream(filePath)
-            req.write(partFileHeader)
-            stream.on('end', () => {
-                req.write(epilogue)
-                req.end()
-            })
-            stream.pipe(req, { end: false })
-=======
-            fs.createReadStream(filePath).pipe(req)
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
+            // Pipe the form data
+            formData.pipe(req);
         } catch (err) {
-            reject(err)
+            reject(err);
         }
-    })
+    });
+};
+
+/**
+ * Edit reel video in Azure Blob
+ * @param {string} oldBlobPath - Existing blob path from DB
+ * @param {FormData} formData - New video file
+ */
+const editReelAzure = (oldBlobPath, formData) => {
+  return new Promise((resolve, reject) => {
+    try {
+      const blobPath = stripSASToken(String(oldBlobPath || ''));
+      
+      if (!blobPath || blobPath.trim() === '') {
+        return reject(new Error('Invalid old blob path provided'));
+      }
+      
+      const run = () => {
+        const urlObj = new URL(AZURE_REELS_ENDPOINTS.EDIT);
+        const headers = {
+          "x-old-blob": blobPath,
+          ...formData.getHeaders(),
+        };
+        const functionKey = process.env.AZURE_FUNCTION_KEY;
+        if (functionKey) headers['x-functions-key'] = functionKey;
+        if (functionKey && !urlObj.searchParams.get('code')) {
+          urlObj.searchParams.set('code', functionKey);
+        }
+        const options = {
+          method: "PUT",
+          hostname: urlObj.hostname,
+          path: urlObj.pathname + urlObj.search,
+          headers,
+        };
+        const client = urlObj.protocol === "https:" ? https : http;
+        const req = client.request(options, (res) => {
+          const chunks = [];
+          res.on("data", (d) => chunks.push(d));
+          res.on("end", () => {
+            const body = Buffer.concat(chunks).toString("utf8");
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              try {
+                resolve(JSON.parse(body));
+              } catch {
+                resolve({ success: true, message: body });
+              }
+            } else {
+              reject(new Error(body || `HTTP ${res.statusCode}`));
+            }
+          });
+        });
+        req.on("error", reject);
+        formData.pipe(req);
+      };
+      if (isAzureBlobUrl(blobPath)) {
+        let testUrl = blobPath;
+        if (!AZURE_SAS_DISABLED) {
+          const { token: sas } = resolveSasToken();
+          if (sas && String(sas).trim()) {
+            testUrl = appendSAS(blobPath);
+          }
+        }
+        try {
+          const u = new URL(testUrl);
+          const optionsHead = { method: 'HEAD', hostname: u.hostname, path: u.pathname + u.search };
+          const clientHead = u.protocol === 'https:' ? https : http;
+          const reqHead = clientHead.request(optionsHead, (resp) => {
+            const ok = (resp.statusCode || 0) >= 200 && (resp.statusCode || 0) < 300;
+            if (!ok) {
+              return reject(new Error('Azure blob not accessible'));
+            }
+            run();
+          });
+          reqHead.on('error', () => run());
+          reqHead.end();
+        } catch {
+          run();
+        }
+      } else {
+        run();
+      }
+
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+const deleteReelAzure = (reelId) => {
+    return new Promise((resolve, reject) => {
+        try {
+            // Construct the delete URL with the reel ID and auth code
+            const deleteUrl = AZURE_REELS_ENDPOINTS.DELETE;
+            const urlObj = new URL(deleteUrl);
+            
+            // Add the reel ID as a query parameter
+            urlObj.searchParams.set('id', reelId);
+
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            const options = {
+                method: 'DELETE',
+                hostname: urlObj.hostname,
+                path: urlObj.pathname + urlObj.search,
+                headers,
+            };
+
+            const client = urlObj.protocol === 'https:' ? https : http;
+            const req = client.request(options, (res) => {
+                const chunks = [];
+                res.on('data', (d) => chunks.push(d));
+                res.on('end', () => {
+                    const body = Buffer.concat(chunks).toString('utf8');
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                        try {
+                            const json = JSON.parse(body);
+                            resolve(json);
+                        } catch {
+                            resolve({ success: true, message: body });
+                        }
+                    } else {
+                        reject(new Error(body || String(res.statusCode)));
+                    }
+                });
+            });
+
+            req.on('error', reject);
+            req.end();
+        } catch (err) {
+            reject(err);
+        }
+    });
+};
+
+const uploadToAzure = (filePath, filename, mimetype = 'video/mp4') => {
+    return new Promise((resolve, reject) => {
+        try {
+            const sanitizeFilename = (name) => {
+                if (!name) return 'upload.mp4';
+                let sanitized = name.replace(/[\r\n\t]/g, '');
+                sanitized = sanitized.normalize('NFKD').replace(/[^\x00-\x7F]/g, '');
+                sanitized = sanitized.replace(/[^A-Za-z0-9._-]/g, '');
+                sanitized = sanitized.substring(0, 80);
+                return sanitized || 'upload.mp4';
+            };
+
+            const sanitizedFilename = sanitizeFilename(filename);
+            const urlObj = new URL(AZURE_UPLOAD_URL);
+
+            const headers = {
+                'Content-Type': mimetype || 'video/mp4',
+                'x-filename': sanitizedFilename,
+                'Content-Length': fs.statSync(filePath).size
+            };
+
+            const functionKey = process.env.AZURE_FUNCTION_KEY;
+            if (functionKey) headers['x-functions-key'] = functionKey;
+
+            const options = {
+                method: 'POST',
+                hostname: urlObj.hostname,
+                path: urlObj.pathname + urlObj.search,
+                headers,
+            };
+
+            const client = urlObj.protocol === 'https:' ? https : http;
+            const req = client.request(options, (res) => {
+                const chunks = [];
+                res.on('data', (d) => chunks.push(d));
+                res.on('end', () => {
+                    const body = Buffer.concat(chunks).toString('utf8');
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                        try {
+                            const json = JSON.parse(body);
+                            resolve(json.url || json.videoUrl || json.blobUrl || json.location || body);
+                        } catch {
+                            resolve(body);
+                        }
+                    } else {
+                        reject(new Error(body || String(res.statusCode)));
+                    }
+                });
+            });
+
+            req.on('error', reject);
+
+            fs.createReadStream(filePath).pipe(req);
+        } catch (err) {
+            reject(err);
+        }
+    });
 }
 
 // Get all sellers from oc_vendor table in sagar database
@@ -210,9 +563,11 @@ const getSellerProducts = async (req, res) => {
 const getBrands = async (req, res) => {
     try {
         const query = `
-            SELECT manufacturer_id as id, name
-            FROM oc_manufacturer
-            ORDER BY name
+            SELECT DISTINCT m.manufacturer_id as id, m.name
+            FROM oc_manufacturer m
+            JOIN oc_product p ON m.manufacturer_id = p.manufacturer_id
+            WHERE p.status = 1
+            ORDER BY m.name
         `;
         
         dbSagar.query(query, (err, results) => {
@@ -238,7 +593,7 @@ const getBrands = async (req, res) => {
             error: error.message 
         })
     }
-};
+}
 
 // Get products for a specific brand/manufacturer from product table in sagar database
 const getBrandProducts = async (req, res) => {
@@ -322,9 +677,12 @@ const getAllProducts = async (req, res) => {
 };
 
 // Get categories from ipshopy_reels database
-const getCategories = async (req, res) => {    try {
+// Get categories from ipshopy_reels database
+const getCategories = async (req, res) => {
+    try {
+        // Only include active categories (status = 1)
         const query = `
-            SELECT reel_category_id as id, name
+            SELECT reel_category_id as id, name, status
             FROM oc_reel_category
             WHERE status = 1
             ORDER BY sort_order, name
@@ -459,11 +817,18 @@ const getProductNamesByIds = async (req, res) => {
     try {
         // Create placeholders for the IN clause
         const placeholders = productIds.map(() => '?').join(',');
+        // Prefer language_id = 1, but gracefully fall back to any available description
         const query = `
-            SELECT p.product_id as id, pd.name
+            SELECT 
+                p.product_id AS id,
+                COALESCE(pd1.name, pd_any.name) AS name
             FROM oc_product p
-            JOIN oc_product_description pd ON p.product_id = pd.product_id
-            WHERE p.product_id IN (${placeholders}) AND pd.language_id = 1
+            LEFT JOIN oc_product_description pd1 
+                ON p.product_id = pd1.product_id AND pd1.language_id = 1
+            LEFT JOIN oc_product_description pd_any 
+                ON p.product_id = pd_any.product_id
+            WHERE p.product_id IN (${placeholders})
+            GROUP BY p.product_id
         `;
         
         dbSagar.query(query, productIds, (err, results) => {
@@ -476,15 +841,23 @@ const getProductNamesByIds = async (req, res) => {
                 });
             }
             
-            // Convert results to a map for easy lookup
-            const productNamesMap = {};
+            // Create a map of found products
+            const foundProductsMap = {};
             results.forEach(product => {
-                productNamesMap[product.id] = product.name;
+                foundProductsMap[product.id] = product.name || 'Unknown Product';
             });
+            
+            // Return results as an array for easier frontend processing
+            // Include all requested product IDs, even if not found in database
+            const productArray = productIds.map(pid => ({
+                id: pid,
+                product_id: pid, // Include both for compatibility
+                name: foundProductsMap[pid] || `Product ${pid}` // Fallback name if not found
+            }));
             
             return res.status(200).json({
                 success: true,
-                data: productNamesMap
+                data: productArray
             });
         });
     } catch (error) {
@@ -512,15 +885,9 @@ const incrementReelView = async (req, res) => {
         // First, check if the reel exists
         const checkQuery = `
             SELECT reel_id FROM (
-<<<<<<< HEAD
                 SELECT reel_id FROM oc_influencer_reels WHERE reel_id = ?
                 UNION ALL
                 SELECT reel_id FROM oc_seller_reels WHERE reel_id = ?
-=======
-                SELECT reel_id FROM influencer_reels WHERE reel_id = ?
-                UNION ALL
-                SELECT reel_id FROM seller_reels WHERE reel_id = ?
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             ) AS reels
         `;
         
@@ -541,15 +908,9 @@ const incrementReelView = async (req, res) => {
                 });
             }
             
-<<<<<<< HEAD
             // Try to increment view count in oc_influencer_reels first
             const incrementInfluencerQuery = `
                 UPDATE oc_influencer_reels
-=======
-            // Try to increment view count in influencer_reels first
-            const incrementInfluencerQuery = `
-                UPDATE influencer_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 SET views = views + 1 
                 WHERE reel_id = ?
             `;
@@ -564,17 +925,10 @@ const incrementReelView = async (req, res) => {
                     });
                 }
                 
-<<<<<<< HEAD
                 // If no rows were affected, try oc_seller_reels
                 if (incResult.affectedRows === 0) {
                     const incrementSellerQuery = `
                         UPDATE oc_seller_reels
-=======
-                // If no rows were affected, try seller_reels
-                if (incResult.affectedRows === 0) {
-                    const incrementSellerQuery = `
-                        UPDATE seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         SET views = views + 1 
                         WHERE reel_id = ?
                     `;
@@ -674,11 +1028,7 @@ const toggleReelLike = async (req, res) => {
                     
                     // Decrement like count in the appropriate table
                     const decrementLikesQuery = `
-<<<<<<< HEAD
                         UPDATE oc_influencer_reels
-=======
-                        UPDATE influencer_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         SET likes = likes - 1 
                         WHERE reel_id = ?
                     `;
@@ -688,11 +1038,7 @@ const toggleReelLike = async (req, res) => {
                             console.error('Error decrementing influencer reel likes:', decErr);
                             // Try seller reels
                             const decrementSellerLikesQuery = `
-<<<<<<< HEAD
                                 UPDATE oc_seller_reels
-=======
-                                UPDATE seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                 SET likes = likes - 1 
                                 WHERE reel_id = ?
                             `;
@@ -731,11 +1077,7 @@ const toggleReelLike = async (req, res) => {
                     
                     // Increment like count in the appropriate table
                     const incrementLikesQuery = `
-<<<<<<< HEAD
                         UPDATE oc_influencer_reels
-=======
-                        UPDATE influencer_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         SET likes = likes + 1 
                         WHERE reel_id = ?
                     `;
@@ -745,11 +1087,7 @@ const toggleReelLike = async (req, res) => {
                             console.error('Error incrementing influencer reel likes:', incErr);
                             // Try seller reels
                             const incrementSellerLikesQuery = `
-<<<<<<< HEAD
                                 UPDATE oc_seller_reels
-=======
-                                UPDATE seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                 SET likes = likes + 1 
                                 WHERE reel_id = ?
                             `;
@@ -803,15 +1141,9 @@ const toggleCreatorFollow = async (req, res) => {
     try {
         // First, get the creator ID from the reel
         const getCreatorQuery = `
-<<<<<<< HEAD
             SELECT influencer_id as creator_id FROM oc_influencer_reels WHERE reel_id = ?
             UNION
             SELECT seller_id as creator_id FROM oc_seller_reels WHERE reel_id = ?
-=======
-            SELECT influencer_id as creator_id FROM influencer_reels WHERE reel_id = ?
-            UNION
-            SELECT seller_id as creator_id FROM seller_reels WHERE reel_id = ?
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         `;
         
         db.query(getCreatorQuery, [id, id], (creatorErr, creatorResults) => {
@@ -1036,14 +1368,69 @@ const uploadInfluencerReel = async (req, res) => {
     console.log('Basic validation passed:', { title, category, associationType })
     
     // Check if video file is provided
-    if (!req.files || !req.files.video) {
+    // Check if video file is provided (multer stores as array with upload.fields())
+    const hasVideoFile = req.files && 
+                        req.files.video && 
+                        Array.isArray(req.files.video) && 
+                        req.files.video.length > 0 && 
+                        req.files.video[0];
+    
+    if (!hasVideoFile) {
         console.log('Video file validation failed - files:', req.files)
+        console.log('Video file structure:', {
+            hasFiles: !!req.files,
+            hasVideo: !!(req.files && req.files.video),
+            videoType: req.files && req.files.video ? typeof req.files.video : 'N/A',
+            isArray: req.files && req.files.video ? Array.isArray(req.files.video) : false,
+            videoLength: req.files && req.files.video && Array.isArray(req.files.video) ? req.files.video.length : 0
+        });
 
         return res.status(400).json({ 
             success: false, 
             message: 'Video file is required' 
         })
     }
+    
+    // Validate video file format
+    const videoFile = req.files.video[0];
+    const allowedMimeTypes = [
+        'video/mp4',
+        'video/x-m4v',
+        'video/quicktime', // .mov
+        'video/x-msvideo', // .avi
+        'video/x-matroska', // .mkv
+        'video/webm',
+        'video/x-flv',
+        'video/x-ms-wmv', // .wmv
+        'video/3gpp',
+        'video/3gpp2'
+    ];
+    
+    const allowedExtensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.m4v', '.3gp', '.3g2'];
+    const fileExtension = videoFile.originalname ? 
+        videoFile.originalname.substring(videoFile.originalname.lastIndexOf('.')).toLowerCase() : '';
+    
+    const isValidMimeType = videoFile.mimetype && allowedMimeTypes.includes(videoFile.mimetype);
+    const isValidExtension = fileExtension && allowedExtensions.includes(fileExtension);
+    
+    if (!isValidMimeType && !isValidExtension) {
+        console.log('Invalid video file format:', {
+            mimetype: videoFile.mimetype,
+            extension: fileExtension,
+            filename: videoFile.originalname
+        });
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid video file format. Please upload MP4, MOV, AVI, MKV, WebM, FLV, or WMV format.' 
+        });
+    }
+    
+    console.log('Video file format validated:', {
+        mimetype: videoFile.mimetype,
+        extension: fileExtension,
+        filename: videoFile.originalname,
+        size: videoFile.size
+    });
     // Enforce max 30s duration (client-provided metadata)
     const videoDurationClientInf = req.body.videoDuration ? parseFloat(String(req.body.videoDuration)) : NaN;
     if (!Number.isNaN(videoDurationClientInf) && videoDurationClientInf > 30.0) {
@@ -1079,11 +1466,10 @@ const uploadInfluencerReel = async (req, res) => {
     
     // Handle file uploads
     // Save actual file paths to database
-    const videoFile = req.files.video ? req.files.video[0] : null;
+    // videoFile is already defined above in validation section (line 1095)
     let videoUrl = null;
     if (videoFile) {
         try {
-<<<<<<< HEAD
             videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename, videoFile.mimetype || 'application/octet-stream');
         } catch (e) {
             console.error('Azure upload failed:', e && e.message ? e.message : e);
@@ -1095,13 +1481,6 @@ const uploadInfluencerReel = async (req, res) => {
             try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
             return res.status(502).json({ success: false, message: 'Azure upload failed' });
         }
-=======
-            videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename);
-        } catch (e) {
-            console.error('Azure upload failed:', e && e.message ? e.message : e)
-        }
-        try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
     }
     
     const thumbnailFile = req.files.thumbnail ? req.files.thumbnail[0] : null;
@@ -1147,24 +1526,119 @@ const uploadInfluencerReel = async (req, res) => {
             }
             
             try {
-<<<<<<< HEAD
+                // Helper to process reel success (category + products + commit)
+                const processReelSuccess = (reelId) => {
+                    const proceedToProductsAndCommit = () => {
+                        if (selectedProducts && selectedProducts.length > 0) {
+                            const productQuery = `
+                                INSERT INTO oc_influencer_reel_product
+                                (reel_id, product_id) 
+                                VALUES ?
+                            `;
+                            const productValues = selectedProducts.map(productId => [reelId, productId]);
+                            
+                            connection.query(productQuery, [productValues], (err) => {
+                                if (err) {
+                                    return connection.rollback(() => {
+                                        connection.release();
+                                        console.error('Database error inserting product associations:', err);
+                                        return res.status(500).json({ 
+                                            success: false, 
+                                            message: 'Error saving product associations',
+                                            error: err.message 
+                                        });
+                                    });
+                                }
+                                commitTransaction();
+                            });
+                        } else {
+                            commitTransaction();
+                        }
+                    };
+
+                    const commitTransaction = () => {
+                        connection.commit((err) => {
+                            if (err) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    console.error('Error committing transaction:', err);
+                                    return res.status(500).json({ 
+                                        success: false, 
+                                        message: 'Error saving reel data' 
+                                    });
+                                });
+                            }
+                            
+                            connection.release();
+                            
+                            return res.status(201).json({
+                                success: true,
+                                message: 'Reel uploaded successfully',
+                                data: { reelId }
+                            });
+                        });
+                    };
+
+                    const insertCategoryAssociation = (catId) => {
+                        const categoryQuery = `
+                            INSERT INTO oc_influencer_reel_to_category
+                            (reel_id, category_id) 
+                            VALUES (?, ?)
+                        `;
+                        connection.query(categoryQuery, [reelId, catId], (err) => {
+                            if (err) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    console.error('Database error inserting category association:', err);
+                                    return res.status(500).json({ 
+                                        success: false, 
+                                        message: 'Error saving category association',
+                                        error: err.message 
+                                    });
+                                });
+                            }
+                            proceedToProductsAndCommit();
+                        });
+                    };
+
+                    if (String(category) === 'other' && otherCategoryName) {
+                        const suggestQuery = `
+                            INSERT INTO oc_reel_category (name, description, sort_order, status, date_added)
+                            VALUES (?, NULL, 0, 0, NOW())
+                        `;
+                        connection.query(suggestQuery, [otherCategoryName], (err, result) => {
+                            if (err) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    console.error('Database error inserting new category:', err);
+                                    return res.status(500).json({
+                                        success: false,
+                                        message: 'Error saving new category',
+                                        error: err.message
+                                    });
+                                });
+                            }
+                            insertCategoryAssociation(result.insertId);
+                        });
+                    } else {
+                        const catIdInf = parseInt(category, 10);
+                        if (!Number.isNaN(catIdInf)) {
+                            insertCategoryAssociation(catIdInf);
+                        } else {
+                            proceedToProductsAndCommit();
+                        }
+                    }
+                };
+
                 // Insert the reel into the database (using oc_influencer_reels table)
                 const influencerId = userId;
                 const reelQuery = `
                     INSERT INTO oc_influencer_reels
-=======
-                // Insert the reel into the database (using influencer_reels table)
-                const influencerId = userId;
-                const reelQuery = `
-                    INSERT INTO influencer_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                     (influencer_id, title, description, video_url, thumbnail, brand_id, status, date_added) 
                     VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
                 `;
                 
-                const descriptionToSaveInfluencer = (String(category) === 'other' && otherCategoryName)
-                    ? ((description ? `${description} ` : '') + `[Requested category: ${otherCategoryName}]`)
-                    : (description || null);
+                const descriptionToSaveInfluencer = description || null;
                 const reelValues = [
                     influencerId,
                     title,
@@ -1175,11 +1649,19 @@ const uploadInfluencerReel = async (req, res) => {
                     0
                 ];
                 
-                console.log('Inserting influencer reel with values:', reelValues)
+                console.log('Inserting influencer reel with values:', {
+                    influencerId,
+                    title,
+                    description: descriptionToSaveInfluencer,
+                    videoUrl: videoUrl ? (videoUrl.substring(0, 100) + '...') : null,
+                    thumbnailUrl,
+                    brandId: associationType === 'brand' ? selectedBrand : null,
+                    status: 0
+                });
+                console.log('Full video URL being saved:', videoUrl);
                 
                 connection.query(reelQuery, reelValues, (err, result) => {
                     if (err) {
-<<<<<<< HEAD
                         const altQuery = `
                             INSERT INTO oc_influencer_reels
                             (influencer_id, title, description, video_url, thumbnail, status, date_added) 
@@ -1209,151 +1691,7 @@ const uploadInfluencerReel = async (req, res) => {
                                 }
                                 const reelId = altResult.insertId;
                                 console.log('Influencer reel inserted successfully, ID:', reelId)
-                                if (String(category) === 'other' && otherCategoryName) {
-                                    const suggestQuery = `
-                                        INSERT INTO oc_reel_category (name, description, sort_order, status, date_added)
-                                        VALUES (?, NULL, 0, 0, NOW())
-                                    `;
-                                    connection.query(suggestQuery, [otherCategoryName], () => {});
-                                }
-                                const categoryQuery = `
-                                    INSERT INTO oc_influencer_reel_to_category
-                                    (reel_id, category_id) 
-                                    VALUES (?, ?)
-                                `;
-                                const catIdInf = parseInt(category, 10);
-                                if (!Number.isNaN(catIdInf)) {
-                                    connection.query(categoryQuery, [reelId, catIdInf], (err) => {
-                                        if (err) {
-                                            return connection.rollback(() => {
-                                                connection.release()
-                                                console.error('Database error inserting category association:', err)
-                                                return res.status(500).json({ 
-                                                    success: false, 
-                                                    message: 'Error saving category association',
-                                                    error: err.message 
-                                                });
-                                            });
-                                        }
-                                        if (selectedProducts && selectedProducts.length > 0) {
-                                            const productQuery = `
-                                                INSERT INTO oc_influencer_reel_product
-                                                (reel_id, product_id) 
-                                                VALUES ?
-                                            `;
-                                            const productValues = selectedProducts.map(productId => [reelId, productId]);
-                                            connection.query(productQuery, [productValues], (err) => {
-                                                if (err) {
-                                                    return connection.rollback(() => {
-                                                        connection.release()
-                                                        console.error('Database error inserting product associations:', err)
-                                                        return res.status(500).json({ 
-                                                            success: false, 
-                                                            message: 'Error saving product associations',
-                                                            error: err.message 
-                                                        });
-                                                    });
-                                                }
-                                                connection.commit((err) => {
-                                                    if (err) {
-                                                        return connection.rollback(() => {
-                                                            connection.release()
-                                                            console.error('Error committing transaction:', err)
-                                                            return res.status(500).json({ 
-                                                                success: false, 
-                                                                message: 'Error saving reel data' 
-                                                            })
-                                                        })
-                                                    }
-                                                    connection.release()
-                                                    return res.status(201).json({
-                                                        success: true,
-                                                        message: 'Reel uploaded successfully',
-                                                        data: { reelId }
-                                                    })
-                                                })
-                                            })
-                                        } else {
-                                            connection.commit((err) => {
-                                                if (err) {
-                                                    return connection.rollback(() => {
-                                                        connection.release()
-                                                        console.error('Error committing transaction:', err)
-                                                        return res.status(500).json({ 
-                                                            success: false, 
-                                                            message: 'Error saving reel data' 
-                                                        });
-                                                    });
-                                                }
-                                                connection.release()
-                                                return res.status(201).json({
-                                                    success: true,
-                                                    message: 'Reel uploaded successfully',
-                                                    data: { reelId }
-                                                });
-                                            })
-                                        }
-                                    })
-                                } else {
-                                    if (selectedProducts && selectedProducts.length > 0) {
-                                        const productQuery = `
-                                            INSERT INTO oc_influencer_reel_product
-                                            (reel_id, product_id) 
-                                            VALUES ?
-                                        `;
-                                        const productValues = selectedProducts.map(productId => [reelId, productId]);
-                                        connection.query(productQuery, [productValues], (err) => {
-                                            if (err) {
-                                                return connection.rollback(() => {
-                                                    connection.release()
-                                                    console.error('Database error inserting product associations:', err)
-                                                    return res.status(500).json({ 
-                                                        success: false, 
-                                                        message: 'Error saving product associations',
-                                                        error: err.message 
-                                                    });
-                                                });
-                                            }
-                                            connection.commit((err) => {
-                                                if (err) {
-                                                    return connection.rollback(() => {
-                                                        connection.release()
-                                                        console.error('Error committing transaction:', err)
-                                                        return res.status(500).json({ 
-                                                            success: false, 
-                                                            message: 'Error saving reel data' 
-                                                        })
-                                                    })
-                                                }
-                                                connection.release()
-                                                return res.status(201).json({
-                                                    success: true,
-                                                    message: 'Reel uploaded successfully',
-                                                    data: { reelId }
-                                                })
-                                            })
-                                        })
-                                    } else {
-                                        connection.commit((err) => {
-                                            if (err) {
-                                                return connection.rollback(() => {
-                                                    connection.release()
-                                                    console.error('Error committing transaction:', err)
-                                                    return res.status(500).json({ 
-                                                        success: false, 
-                                                        message: 'Error saving reel data' 
-                                                    });
-                                                });
-                                            }
-                                            connection.release()
-                                            return res.status(201).json({
-                                                success: true,
-                                                message: 'Reel uploaded successfully',
-                                                data: { reelId }
-                                            });
-                                        })
-                                    }
-                                }
+                                processReelSuccess(reelId);
                             })
                         } else {
                             return connection.rollback(() => {
@@ -1366,17 +1704,6 @@ const uploadInfluencerReel = async (req, res) => {
                                 })
                             })
                         }
-=======
-                        return connection.rollback(() => {
-                            connection.release()
-                            console.error('Database error inserting influencer reel:', err)
-                            return res.status(500).json({ 
-                                success: false, 
-                                message: 'Error saving reel',
-                                error: err.message 
-                            })
-                        })
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                     }
                     
                     const reelId = result.insertId;
@@ -1392,11 +1719,7 @@ const uploadInfluencerReel = async (req, res) => {
 
                     // Insert category association
                     const categoryQuery = `
-<<<<<<< HEAD
                         INSERT INTO oc_influencer_reel_to_category
-=======
-                        INSERT INTO influencer_reel_to_category 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         (reel_id, category_id) 
                         VALUES (?, ?)
                     `;
@@ -1418,11 +1741,7 @@ const uploadInfluencerReel = async (req, res) => {
                             // Insert product associations
                             if (selectedProducts && selectedProducts.length > 0) {
                                 const productQuery = `
-<<<<<<< HEAD
                                     INSERT INTO oc_influencer_reel_product
-=======
-                                    INSERT INTO influencer_reel_product 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                     (reel_id, product_id) 
                                     VALUES ?
                                 `;
@@ -1492,11 +1811,7 @@ const uploadInfluencerReel = async (req, res) => {
                         // Insert product associations
                         if (selectedProducts && selectedProducts.length > 0) {
                             const productQuery = `
-<<<<<<< HEAD
                                 INSERT INTO oc_influencer_reel_product
-=======
-                                INSERT INTO influencer_reel_product 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                 (reel_id, product_id) 
                                 VALUES ?
                             `;
@@ -1581,11 +1896,7 @@ const uploadInfluencerReel = async (req, res) => {
 
 // Upload a new seller reel
 const uploadSellerReel = async (req, res) => {
-<<<<<<< HEAD
     // Similar implementation for seller reels using oc_seller_reels table
-=======
-    // Similar implementation for seller reels using seller_reels table
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
     // Log the received data for debugging
     console.log('=== NEW SELLER REEL UPLOAD REQUEST ===')
     console.log('Request headers:', req.headers)
@@ -1636,6 +1947,7 @@ const uploadSellerReel = async (req, res) => {
         category,  // Using 'category' as it's sent from frontend
         associationType = 'product', // Default to 'product' if not provided
         selectedBrand,
+        selectedSeller,  // Seller vendor_id from frontend
         otherCategoryName
     } = req.body;
     
@@ -1703,9 +2015,22 @@ const uploadSellerReel = async (req, res) => {
     
     console.log('Basic validation passed:', { title, category, associationType })
     
-    // Check if video file is provided
-    if (!req.files || !req.files.video) {
-        console.log('Video file validation failed - files:', req.files)
+    // Check if video file is provided (multer stores as array with upload.fields())
+    const hasVideoFile = req.files && 
+                        req.files.video && 
+                        Array.isArray(req.files.video) && 
+                        req.files.video.length > 0 && 
+                        req.files.video[0];
+    
+    if (!hasVideoFile) {
+        console.log('Video file validation failed:', {
+            hasFiles: !!req.files,
+            hasVideo: !!(req.files && req.files.video),
+            videoType: req.files && req.files.video ? typeof req.files.video : 'N/A',
+            isArray: req.files && req.files.video ? Array.isArray(req.files.video) : false,
+            videoLength: req.files && req.files.video && Array.isArray(req.files.video) ? req.files.video.length : 0,
+            filesKeys: req.files ? Object.keys(req.files) : []
+        });
 
         return res.status(400).json({ 
             success: false, 
@@ -1751,25 +2076,20 @@ const uploadSellerReel = async (req, res) => {
     let videoUrl = null;
     if (videoFile) {
         try {
-<<<<<<< HEAD
             videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename, videoFile.mimetype || 'application/octet-stream');
         } catch (e) {
             console.error('Azure upload failed:', e && e.message ? e.message : e);
         }
         if (videoUrl) {
-            videoUrl = appendSAS(videoUrl)
+            // IMPORTANT: Save video URL WITHOUT SAS token to database
+            // SAS tokens expire, so we append them dynamically when retrieving
+            videoUrl = stripSASToken(videoUrl);
+            console.log('[uploadSellerReel] Saving video URL to database (without SAS token):', videoUrl.substring(0, 100));
             try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
         } else {
             try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
             return res.status(502).json({ success: false, message: 'Azure upload failed' });
         }
-=======
-            videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename);
-        } catch (e) {
-            console.error('Azure upload failed:', e && e.message ? e.message : e)
-        }
-        try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
     }
     
     const thumbnailFile = req.files.thumbnail ? req.files.thumbnail[0] : null;
@@ -1815,26 +2135,76 @@ const uploadSellerReel = async (req, res) => {
             }
             
             try {
-                // Get the vendor_id for the seller from oc_sellers table
-                const vendorQuery = `SELECT vendor_id FROM oc_sellers WHERE id = ?`;
+                // Determine vendorId based on user role
+                let vendorId = null;
                 
-                db.query(vendorQuery, [userId], (vendorErr, vendorResults) => {
-                    if (vendorErr) {
+                // Debug logging to see what's in req.user
+                console.log('Debug - req.user:', req.user);
+                
+                // Check if user is a seller (has vendor_id in token)
+                if (req.user && req.user.vendor_id) {
+                    // Authenticated seller - use their vendor_id
+                    vendorId = parseInt(req.user.vendor_id, 10);
+                    console.log('Using vendor_id from authenticated seller:', vendorId);
+                } else if (req.user && (req.user.role === 'admin' || req.user.role === 1)) {
+                    // Authenticated admin - they must specify which seller
+                    console.log('Admin user detected, checking for selectedSeller parameter');
+                    if (!selectedSeller) {
                         return connection.rollback(() => {
                             connection.release();
-                            console.error('Database error fetching vendor ID:', vendorErr);
+                            console.error('Admin must specify selectedSeller for seller reel upload');
+                            return res.status(400).json({ 
+                                success: false, 
+                                message: 'Admin must specify seller for reel upload' 
+                            });
+                        });
+                    }
+                    vendorId = parseInt(selectedSeller, 10);
+                    console.log('Using vendor_id from selectedSeller parameter:', vendorId);
+                } else {
+                    // Neither seller nor admin - authentication issue
+                    return connection.rollback(() => {
+                        connection.release();
+                        console.error('Could not determine seller information from authentication token');
+                        return res.status(400).json({ 
+                            success: false, 
+                            message: 'Could not determine seller information. Please log in again.' 
+                        });
+                    });
+                }
+                
+                // Validate vendorId
+                if (!vendorId || isNaN(vendorId)) {
+                    return connection.rollback(() => {
+                        connection.release();
+                        console.error('Invalid seller ID:', vendorId);
+                        return res.status(400).json({ 
+                            success: false, 
+                            message: 'Invalid seller ID' 
+                        });
+                    });
+                }
+                
+                // Verify seller exists in oc_sellers table
+                const sellerCheckQuery = `SELECT id, vendor_id FROM oc_sellers WHERE vendor_id = ?`;
+                
+                db.query(sellerCheckQuery, [vendorId], (sellerErr, sellerResults) => {
+                    if (sellerErr) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            console.error('Database error checking seller:', sellerErr);
                             return res.status(500).json({ 
                                 success: false, 
-                                message: 'Error fetching seller information',
-                                error: vendorErr.message 
+                                message: 'Error verifying seller information',
+                                error: sellerErr.message 
                             });
                         });
                     }
                     
-                    if (vendorResults.length === 0) {
+                    if (sellerResults.length === 0) {
                         return connection.rollback(() => {
                             connection.release();
-                            console.error('Seller not found in oc_sellers table for user ID:', userId);
+                            console.error('Seller not found in oc_sellers table for vendor_id:', vendorId);
                             return res.status(404).json({ 
                                 success: false, 
                                 message: 'Seller not found' 
@@ -1842,23 +2212,16 @@ const uploadSellerReel = async (req, res) => {
                         });
                     }
                     
-                    const vendorId = vendorResults[0].vendor_id;
-                    console.log('Found vendor ID for user:', userId, 'is:', vendorId);
+                    console.log('Verified seller exists - vendor_id:', vendorId);
                     
-                    
+                    // Insert the reel
                     const reelQuery = `
-<<<<<<< HEAD
                         INSERT INTO oc_seller_reels
-=======
-                        INSERT INTO seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         (seller_id, title, description, video_url, thumbnail, brand_id, status, date_added) 
                         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
                     `;
                     
-                    const descriptionToSave = (String(category) === 'other' && otherCategoryName)
-                        ? ((description ? `${description} ` : '') + `[Requested category: ${otherCategoryName}]`)
-                        : (description || null);
+                    const descriptionToSave = description || null;
 
                     const reelValues = [
                         vendorId,  // Use vendor_id instead of user id
@@ -1892,11 +2255,7 @@ const uploadSellerReel = async (req, res) => {
                             const insertProductsAndCommit = () => {
                                 if (selectedProducts && selectedProducts.length > 0) {
                                     const productQuery = `
-<<<<<<< HEAD
                                         INSERT INTO oc_seller_reel_product
-=======
-                                        INSERT INTO seller_reel_product 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                         (reel_id, product_id) 
                                         VALUES ?
                                     `;
@@ -1928,7 +2287,11 @@ const uploadSellerReel = async (req, res) => {
                                             return res.status(201).json({
                                                 success: true,
                                                 message: 'Reel uploaded successfully',
-                                                data: { reelId }
+                                                data: { 
+                                                    reelId,
+                                                    video_url: videoUrl,
+                                                    thumbnail_url: thumbnailUrl
+                                                }
                                             })
                                         })
                                     })
@@ -1948,7 +2311,11 @@ const uploadSellerReel = async (req, res) => {
                                         return res.status(201).json({
                                             success: true,
                                             message: 'Reel uploaded successfully',
-                                            data: { reelId }
+                                            data: { 
+                                                reelId,
+                                                video_url: videoUrl,
+                                                thumbnail_url: thumbnailUrl
+                                            }
                                         });
                                     })
                                 }
@@ -1957,11 +2324,7 @@ const uploadSellerReel = async (req, res) => {
                             const catId = parseInt(category, 10);
                             if (!Number.isNaN(catId)) {
                                 const categoryQuery = `
-<<<<<<< HEAD
                                     INSERT INTO oc_seller_reel_to_category
-=======
-                                    INSERT INTO seller_reel_to_category 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                     (reel_id, category_id) 
                                     VALUES (?, ?)
                                 `;
@@ -1997,11 +2360,7 @@ const uploadSellerReel = async (req, res) => {
                                         });
                                     }
                                     const newCatId = catResult.insertId;
-<<<<<<< HEAD
                                     const insOtherCat = `INSERT INTO oc_seller_reel_to_category (reel_id, category_id) VALUES (?, ?)`;
-=======
-                                    const insOtherCat = `INSERT INTO seller_reel_to_category (reel_id, category_id) VALUES (?, ?)`;
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                     connection.query(insOtherCat, [reelId, newCatId], (linkErr) => {
                                         if (linkErr) {
                                             return connection.rollback(() => {
@@ -2045,6 +2404,12 @@ const uploadSellerReel = async (req, res) => {
 
 const editReel = async (req, res) => {
     const { id } = req.params;
+    
+    // Validate reel ID
+    if (!id) {
+        return res.status(400).json({ success: false, message: 'Reel ID is required' });
+    }
+    
     const { title, description, category, associationType, selectedBrand, otherCategoryName } = req.body;
     let selectedProducts = req.body.selectedProducts;
 
@@ -2098,13 +2463,21 @@ const editReel = async (req, res) => {
         return res.status(400).json({ success: false, message: 'You can select maximum 3 products' });
     }
 
+    // Handle files as optional - only process if they exist
     const videoFile = req.files && req.files.video ? req.files.video[0] : null;
     const thumbnailFile = req.files && req.files.thumbnail ? req.files.thumbnail[0] : null;
     let videoUrl = null;
+    
+    // Process video file only if it exists
     if (videoFile) {
         try {
             videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename);
-<<<<<<< HEAD
+            // IMPORTANT: Save video URL WITHOUT SAS token to database
+            // SAS tokens expire, so we append them dynamically when retrieving
+            if (videoUrl && videoUrl.startsWith('http')) {
+                videoUrl = stripSASToken(videoUrl);
+                console.log('[editReel] Saving video URL to database (without SAS token):', videoUrl.substring(0, 100));
+            }
             // Delete local file after successful Azure upload
             try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
         } catch (e) {
@@ -2127,50 +2500,38 @@ const editReel = async (req, res) => {
         });
     }
     
-=======
-        } catch (e) {
-            console.error('Azure upload failed:', e && e.message ? e.message : e)
-        }
-        try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
-    }
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
+    // Process thumbnail file only if it exists
     const thumbnailUrl = thumbnailFile ? `/uploads/${thumbnailFile.filename}` : null;
 
+    // Wrap all database operations in try-catch for proper error handling
     try {
         db.getConnection((err, connection) => {
             if (err) {
+                console.error('Database connection error:', err);
                 return res.status(500).json({ success: false, message: 'Database connection error' });
             }
 
             connection.beginTransaction(err => {
                 if (err) {
                     connection.release();
+                    console.error('Transaction error:', err);
                     return res.status(500).json({ success: false, message: 'Transaction error' });
                 }
 
-<<<<<<< HEAD
                 const checkInfluencer = `SELECT reel_id FROM oc_influencer_reels WHERE reel_id = ?`;
-=======
-                const checkInfluencer = `SELECT reel_id FROM influencer_reels WHERE reel_id = ?`;
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 connection.query(checkInfluencer, [id], (err, results) => {
                     if (err) {
                         return connection.rollback(() => {
                             connection.release();
+                            console.error('Error checking reel type:', err);
                             return res.status(500).json({ success: false, message: 'Error checking reel type', error: err.message });
                         });
                     }
 
                     const isInfluencerReel = results.length > 0;
-<<<<<<< HEAD
                     const tableName = isInfluencerReel ? 'oc_influencer_reels' : 'oc_seller_reels';
                     const categoryTable = isInfluencerReel ? 'oc_influencer_reel_to_category' : 'oc_seller_reel_to_category';
                     const productTable = isInfluencerReel ? 'oc_influencer_reel_product' : 'oc_seller_reel_product';
-=======
-                    const tableName = isInfluencerReel ? 'influencer_reels' : 'seller_reels';
-                    const categoryTable = isInfluencerReel ? 'influencer_reel_to_category' : 'seller_reel_to_category';
-                    const productTable = isInfluencerReel ? 'influencer_reel_product' : 'seller_reel_product';
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
 
                     const updateFields = [];
                     const updateValues = [];
@@ -2178,9 +2539,7 @@ const editReel = async (req, res) => {
                     updateFields.push('title = ?');
                     updateValues.push(title);
 
-                    const descToSave = (String(category) === 'other' && otherCategoryName)
-                        ? ((description ? `${description} ` : '') + `[Requested category: ${String(otherCategoryName).trim()}]`)
-                        : (description || null);
+                    const descToSave = description || null;
                     updateFields.push('description = ?');
                     updateValues.push(descToSave);
 
@@ -2194,9 +2553,11 @@ const editReel = async (req, res) => {
                         updateValues.push(thumbnailUrl);
                     }
 
+                    // Convert brand ID to integer for safer handling
+                    const brandIdInt = selectedBrand ? parseInt(selectedBrand, 10) : null;
                     if (associationType === 'brand') {
                         updateFields.push('brand_id = ?');
-                        updateValues.push(parseInt(selectedBrand, 10) || null);
+                        updateValues.push(!isNaN(brandIdInt) ? brandIdInt : null);
                     } else {
                         updateFields.push('brand_id = ?');
                         updateValues.push(null);
@@ -2209,6 +2570,7 @@ const editReel = async (req, res) => {
                         if (err) {
                             return connection.rollback(() => {
                                 connection.release();
+                                console.error('Error updating reel:', err);
                                 return res.status(500).json({ success: false, message: 'Error updating reel', error: err.message });
                             });
                         }
@@ -2226,17 +2588,19 @@ const editReel = async (req, res) => {
                                 if (err) {
                                     return connection.rollback(() => {
                                         connection.release();
+                                        console.error('Error updating products:', err);
                                         return res.status(500).json({ success: false, message: 'Error updating products', error: err.message });
                                     });
                                 }
 
                                 if (selectedProducts && selectedProducts.length > 0) {
                                     const insProd = `INSERT INTO ${productTable} (reel_id, product_id) VALUES ?`;
-                                    const values = selectedProducts.map(pid => [id, pid]);
+                                    const values = selectedProducts.map(pid => [id, parseInt(pid, 10)]);
                                     connection.query(insProd, [values], err => {
                                         if (err) {
                                             return connection.rollback(() => {
                                                 connection.release();
+                                                console.error('Error updating products:', err);
                                                 return res.status(500).json({ success: false, message: 'Error updating products', error: err.message });
                                             });
                                         }
@@ -2245,6 +2609,7 @@ const editReel = async (req, res) => {
                                             if (err) {
                                                 return connection.rollback(() => {
                                                     connection.release();
+                                                    console.error('Error saving changes:', err);
                                                     return res.status(500).json({ success: false, message: 'Error saving changes' });
                                                 });
                                             }
@@ -2258,6 +2623,7 @@ const editReel = async (req, res) => {
                                         if (err) {
                                             return connection.rollback(() => {
                                                 connection.release();
+                                                console.error('Error saving changes:', err);
                                                 return res.status(500).json({ success: false, message: 'Error saving changes' });
                                             });
                                         }
@@ -2268,22 +2634,25 @@ const editReel = async (req, res) => {
                             });
                         };
 
-                        const catId = parseInt(category, 10);
-                        if (!Number.isNaN(catId)) {
+                        // Convert category to integer for safer handling
+                        const categoryId = parseInt(category, 10);
+                        if (!Number.isNaN(categoryId)) {
                             const delCat = `DELETE FROM ${categoryTable} WHERE reel_id = ?`;
                             connection.query(delCat, [id], err => {
                                 if (err) {
                                     return connection.rollback(() => {
                                         connection.release();
+                                        console.error('Error updating category:', err);
                                         return res.status(500).json({ success: false, message: 'Error updating category', error: err.message });
                                     });
                                 }
 
                                 const insCat = `INSERT INTO ${categoryTable} (reel_id, category_id) VALUES (?, ?)`;
-                                connection.query(insCat, [id, catId], err => {
+                                connection.query(insCat, [id, categoryId], err => {
                                     if (err) {
                                         return connection.rollback(() => {
                                             connection.release();
+                                            console.error('Error updating category:', err);
                                             return res.status(500).json({ success: false, message: 'Error updating category', error: err.message });
                                         });
                                     }
@@ -2299,6 +2668,7 @@ const editReel = async (req, res) => {
                                 if (catErr) {
                                     return connection.rollback(() => {
                                         connection.release();
+                                        console.error('Error creating category:', catErr);
                                         return res.status(500).json({ success: false, message: 'Error creating category', error: catErr.message });
                                     });
                                 }
@@ -2308,6 +2678,7 @@ const editReel = async (req, res) => {
                                     if (err) {
                                         return connection.rollback(() => {
                                             connection.release();
+                                            console.error('Error updating category:', err);
                                             return res.status(500).json({ success: false, message: 'Error updating category', error: err.message });
                                         });
                                     }
@@ -2316,6 +2687,7 @@ const editReel = async (req, res) => {
                                         if (err) {
                                             return connection.rollback(() => {
                                                 connection.release();
+                                                console.error('Error updating category:', err);
                                                 return res.status(500).json({ success: false, message: 'Error updating category', error: err.message });
                                             });
                                         }
@@ -2331,7 +2703,8 @@ const editReel = async (req, res) => {
             });
         });
     } catch (error) {
-        return res.status(500).json({ success: false, message: 'Internal server error' });
+        console.error('Unexpected error in editReel:', error);
+        return res.status(500).json({ success: false, message: 'An unexpected error occurred', error: error.message });
     }
 }
 
@@ -2603,15 +2976,9 @@ const createReel = async (req, res) => {
                     const vendorId = vendorResults[0].vendor_id;
                     console.log('Found vendor ID for user:', userId, 'is:', vendorId);
                     
-<<<<<<< HEAD
                     // Insert the reel into the database (using oc_seller_reels table)
                     const reelQuery = `
                         INSERT INTO oc_seller_reels
-=======
-                    // Insert the reel into the database (using seller_reels table)
-                    const reelQuery = `
-                        INSERT INTO seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         (seller_id, title, description, video_url, thumbnail, status, date_added) 
                         VALUES (?, ?, ?, ?, ?, ?, NOW())
                     `;
@@ -2645,11 +3012,7 @@ const createReel = async (req, res) => {
                         
                         // Insert category association
                         const categoryQuery = `
-<<<<<<< HEAD
                             INSERT INTO oc_seller_reel_to_category
-=======
-                            INSERT INTO seller_reel_to_category 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                             (reel_id, category_id) 
                             VALUES (?, ?)
                         `;
@@ -2670,11 +3033,7 @@ const createReel = async (req, res) => {
                             // Insert product associations
                             if (selectedProducts && selectedProducts.length > 0) {
                                 const productQuery = `
-<<<<<<< HEAD
                                     INSERT INTO oc_seller_reel_product
-=======
-                                    INSERT INTO seller_reel_product 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                                     (reel_id, product_id) 
                                     VALUES ?
                                 `;
@@ -2775,6 +3134,7 @@ const getInfluencerReels = async (req, res) => {
                 CASE 
                     WHEN ir.status = 1 THEN 'approved'
                     WHEN ir.status = 0 THEN 'pending'
+                    WHEN ir.status = 2 THEN 'rejected'
                     ELSE 'unknown'
                 END as status,
                 0 as views,
@@ -2783,17 +3143,10 @@ const getInfluencerReels = async (req, res) => {
                 ir.video_url,
                 ir.thumbnail,
                 GROUP_CONCAT(irp.product_id) as product_ids
-<<<<<<< HEAD
             FROM oc_influencer_reels ir
             LEFT JOIN oc_influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
             LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
             LEFT JOIN oc_influencer_reel_product irp ON ir.reel_id = irp.reel_id
-=======
-            FROM influencer_reels ir
-            LEFT JOIN influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
-            LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
-            LEFT JOIN influencer_reel_product irp ON ir.reel_id = irp.reel_id
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE ir.influencer_id = ?
         `;
         
@@ -2869,34 +3222,54 @@ const getInfluencerReels = async (req, res) => {
                     productCount = productIds.length;
                 }
                 
-                // Construct full URLs for video and thumbnail
-                let fullVideoUrl = null;
-                let fullThumbnailUrl = null;
-                
-                if (reel.video_url) {
-                    fullVideoUrl = reel.video_url.startsWith('http') ? reel.video_url : `${baseUrl}${reel.video_url}`;
-                }
-                if (reel.thumbnail) {
-                    fullThumbnailUrl = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
-                }
+                    // Construct full URLs for video and thumbnail
+                    let fullVideoUrl = null;
+                    let fullThumbnailUrl = null;
+                    
+                    if (reel.video_url) {
+                        // Check if it's already a full URL (Azure or external)
+                        if (reel.video_url.startsWith('http')) {
+                            fullVideoUrl = reel.video_url;
+                        } else {
+                            // It's a relative path - construct full URL
+                            fullVideoUrl = `${baseUrl}${reel.video_url}`;
+                        }
+                    }
+                    if (reel.thumbnail) {
+                        fullThumbnailUrl = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
+                    }
+                    
+                    // Append SAS token only for Azure URLs
+                    const videoUrlWithSAS = fullVideoUrl ? appendSAS(fullVideoUrl) : null;
+                    
+                    // Log video URL for debugging (only for Azure URLs)
+                    if (videoUrlWithSAS && isAzureBlobUrl(videoUrlWithSAS)) {
+                        const hasSasToken = videoUrlWithSAS.includes('?') || videoUrlWithSAS.includes('&');
+                        const { token: sasToken, source: sasSource } = resolveSasToken();
+                        console.log(`[getInfluencerReels] Azure video URL for reel ${reel.id}:`, {
+                            original: reel.video_url?.substring(0, 100),
+                            withSAS: videoUrlWithSAS.substring(0, 100),
+                            hasSasToken: hasSasToken,
+                            fullLength: videoUrlWithSAS.length,
+                            sasConfigured: Boolean(sasToken),
+                            sasSource: sasSource || 'none'
+                        });
+                        if (!hasSasToken) {
+                            console.warn(`[getInfluencerReels] WARNING: Azure video URL missing SAS token for reel ${reel.id}`);
+                            if (!sasToken) {
+                                console.warn('[getInfluencerReels] SAS token not configured in environment.');
+                            }
+                        }
+                    }
                 
                 return {
                     ...reel,
-<<<<<<< HEAD
-                    video_url: fullVideoUrl ? appendSAS(fullVideoUrl) : null,
+                    video_url: videoUrlWithSAS,
                     thumbnail: fullThumbnailUrl,
                     product_ids: productIds,
                     product_count: productCount,
                     related_products_count: productCount,
                     product_names: []
-=======
-                    video_url: fullVideoUrl,
-                    thumbnail: fullThumbnailUrl,
-                    product_ids: productIds,
-                    product_count: productCount,
-                    related_products_count: productCount, // Use actual product count instead of placeholder
-                    product_names: [] // We can't get product names without cross-database join
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 };
             })
             
@@ -3023,6 +3396,7 @@ const getSellerReels = async (req, res) => {
                     CASE 
                         WHEN sr.status = 1 THEN 'approved'
                         WHEN sr.status = 0 THEN 'pending'
+                        WHEN sr.status = 2 THEN 'rejected'
                         ELSE 'unknown'
                     END as status,
                     0 as views,
@@ -3031,10 +3405,10 @@ const getSellerReels = async (req, res) => {
                     sr.video_url,
                     sr.thumbnail,
                     GROUP_CONCAT(srp.product_id) as product_ids
-                FROM seller_reels sr
-                LEFT JOIN seller_reel_to_category srtc ON sr.reel_id = srtc.reel_id
+                FROM oc_seller_reels sr
+                LEFT JOIN oc_seller_reel_to_category srtc ON sr.reel_id = srtc.reel_id
                 LEFT JOIN oc_reel_category orc ON srtc.category_id = orc.reel_category_id
-                LEFT JOIN seller_reel_product srp ON sr.reel_id = srp.reel_id
+                LEFT JOIN oc_seller_reel_product srp ON sr.reel_id = srp.reel_id
                 WHERE sr.seller_id = ?
             `;
             
@@ -3060,7 +3434,7 @@ const getSellerReels = async (req, res) => {
             if (product) {
                 // Join with product table to filter by product name
                 // Using sagar database for oc_product table
-                query += ' AND sr.reel_id IN (SELECT DISTINCT srp2.reel_id FROM seller_reel_product srp2 LEFT JOIN sagar.oc_product op ON srp2.product_id = op.product_id LEFT JOIN sagar.oc_product_description opd ON op.product_id = opd.product_id WHERE opd.name LIKE ? AND opd.language_id = 1)';
+                query += ' AND sr.reel_id IN (SELECT DISTINCT srp2.reel_id FROM oc_seller_reel_product srp2 LEFT JOIN sagar.oc_product op ON srp2.product_id = op.product_id LEFT JOIN sagar.oc_product_description opd ON op.product_id = opd.product_id WHERE opd.name LIKE ? AND opd.language_id = 1)';
                 queryParams.push(`%${product}%`);
             }
 
@@ -3132,36 +3506,112 @@ const getSellerReels = async (req, res) => {
                     let fullThumbnailUrl = null;
                     
                     if (reel.video_url) {
-                        fullVideoUrl = reel.video_url.startsWith('http') ? reel.video_url : `${baseUrl}${reel.video_url}`;
+                        // Check if it's already a full URL (Azure or external)
+                        if (reel.video_url.startsWith('http')) {
+                            fullVideoUrl = reel.video_url;
+                        } else {
+                            // It's a relative path - construct full URL
+                            fullVideoUrl = `${baseUrl}${reel.video_url}`;
+                        }
                     }
                     if (reel.thumbnail) {
                         fullThumbnailUrl = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
                     }
                     
+                    // Append SAS token only for Azure URLs
+                    const videoUrlWithSAS = fullVideoUrl ? appendSAS(fullVideoUrl) : null;
+                    
+                    // Log video URL for debugging (only for Azure URLs)
+                    if (videoUrlWithSAS && isAzureBlobUrl(videoUrlWithSAS)) {
+                        const hasSasToken = videoUrlWithSAS.includes('?') || videoUrlWithSAS.includes('&');
+                        console.log(`[getSellerReels] Azure video URL for reel ${reel.id}:`, {
+                            original: reel.video_url?.substring(0, 100),
+                            withSAS: videoUrlWithSAS.substring(0, 100),
+                            hasSasToken: hasSasToken,
+                            fullLength: videoUrlWithSAS.length
+                        });
+                        if (!hasSasToken) {
+                            console.warn(`[getSellerReels] WARNING: Azure video URL missing SAS token for reel ${reel.id}`);
+                        }
+                    }
+                    
                     return {
                         ...reel,
-<<<<<<< HEAD
-                        video_url: fullVideoUrl ? appendSAS(fullVideoUrl) : null,
+                        video_url: videoUrlWithSAS,
                         thumbnail: fullThumbnailUrl,
                         product_ids: productIds,
                         product_count: productCount,
                         related_products_count: Math.min(3, Math.max(0, productCount > 0 ? 3 : 0)),
-                        product_names: []
-=======
-                        video_url: fullVideoUrl,
-                        thumbnail: fullThumbnailUrl,
-                        product_ids: productIds,
-                        product_count: productCount,
-                        related_products_count: Math.min(3, Math.max(0, productCount > 0 ? 3 : 0)), // Placeholder: show up to 3 related products
-                        product_names: [] // We can't get product names without cross-database join
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
+                        product_names: [],
+                        brand_names: []
                     };
                 })
                 
-                return res.status(200).json({
-                    success: true,
-                    data: formattedResults
-                })
+                // If there are product IDs, fetch their names and associated brands from sagar DB
+                const allProductIds = Array.from(new Set(formattedResults.flatMap(r => r.product_ids || []))).filter(id => !!id);
+                if (allProductIds.length === 0) {
+                    return res.status(200).json({
+                        success: true,
+                        data: formattedResults
+                    })
+                }
+                
+                const namesQuery = `
+                    SELECT p.product_id as id, pd.name, p.manufacturer_id as brand_id
+                    FROM oc_product p
+                    JOIN oc_product_description pd ON p.product_id = pd.product_id AND pd.language_id = 1
+                    WHERE p.product_id IN (${allProductIds.map(() => '?').join(',')})
+                `;
+                dbSagar.query(namesQuery, allProductIds, (nErr, rows) => {
+                    if (nErr) {
+                        console.error('Error fetching product names:', nErr);
+                        return res.status(200).json({ success: true, data: formattedResults });
+                    }
+                    const productNameMap = {};
+                    const brandIdSet = new Set();
+                    rows.forEach(r => {
+                        productNameMap[r.id] = r.name;
+                        if (r.brand_id) brandIdSet.add(r.brand_id);
+                    });
+                    
+                    const brandIds = Array.from(brandIdSet);
+                    if (brandIds.length === 0) {
+                        const withNames = formattedResults.map(reel => ({
+                            ...reel,
+                            product_names: (reel.product_ids || []).map(pid => productNameMap[pid]).filter(Boolean)
+                        }));
+                        return res.status(200).json({ success: true, data: withNames });
+                    }
+                    
+                    const brandQuery = `SELECT manufacturer_id as id, name FROM oc_manufacturer WHERE manufacturer_id IN (${brandIds.map(() => '?').join(',')})`;
+                    dbSagar.query(brandQuery, brandIds, (bErr, bRows) => {
+                        if (bErr) {
+                            console.error('Error fetching brand names:', bErr);
+                            const withNames = formattedResults.map(reel => ({
+                                ...reel,
+                                product_names: (reel.product_ids || []).map(pid => productNameMap[pid]).filter(Boolean)
+                            }));
+                            return res.status(200).json({ success: true, data: withNames });
+                        }
+                        const brandNameMap = {};
+                        bRows.forEach(b => { brandNameMap[b.id] = b.name; });
+                        const withNamesBrands = formattedResults.map(reel => {
+                            const brandNamesFromProducts = (reel.product_ids || [])
+                                .map(pid => {
+                                    const row = rows.find(r => r.id === pid);
+                                    return row && brandNameMap[row.brand_id];
+                                })
+                                .filter(Boolean);
+                            const uniqueBrandNames = Array.from(new Set(brandNamesFromProducts));
+                            return {
+                                ...reel,
+                                product_names: (reel.product_ids || []).map(pid => productNameMap[pid]).filter(Boolean),
+                                brand_names: uniqueBrandNames
+                            };
+                        });
+                        return res.status(200).json({ success: true, data: withNamesBrands });
+                    });
+                });
             })
         });
     } catch (error) {
@@ -3210,11 +3660,7 @@ const deleteReel = async (req, res) => {
                 
                 try {
                     // First, determine if this is an influencer or seller reel by checking both tables
-<<<<<<< HEAD
                     const checkInfluencerQuery = `SELECT reel_id FROM oc_influencer_reels WHERE reel_id = ?`;
-=======
-                    const checkInfluencerQuery = `SELECT reel_id FROM influencer_reels WHERE reel_id = ?`;
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                     connection.query(checkInfluencerQuery, [id], (err, results) => {
                         if (err) {
                             return connection.rollback(() => {
@@ -3229,15 +3675,9 @@ const deleteReel = async (req, res) => {
                         }
                         
                         const isInfluencerReel = results.length > 0;
-<<<<<<< HEAD
                         const tableName = isInfluencerReel ? 'oc_influencer_reels' : 'oc_seller_reels';
                         const categoryTable = isInfluencerReel ? 'oc_influencer_reel_to_category' : 'oc_seller_reel_to_category';
                         const productTable = isInfluencerReel ? 'oc_influencer_reel_product' : 'oc_seller_reel_product';
-=======
-                        const tableName = isInfluencerReel ? 'influencer_reels' : 'seller_reels';
-                        const categoryTable = isInfluencerReel ? 'influencer_reel_to_category' : 'seller_reel_to_category';
-                        const productTable = isInfluencerReel ? 'influencer_reel_product' : 'seller_reel_product';
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                         
                         // Delete product associations first
                         const deleteProductsQuery = `DELETE FROM ${productTable} WHERE reel_id = ?`;
@@ -3368,6 +3808,7 @@ const getReelById = async (req, res) => {
                 CASE 
                     WHEN ir.status = 1 THEN 'approved'
                     WHEN ir.status = 0 THEN 'pending'
+                    WHEN ir.status = 2 THEN 'rejected'
                     ELSE 'unknown'
                 END as status,
                 0 as views,
@@ -3375,17 +3816,10 @@ const getReelById = async (req, res) => {
                 ir.date_added as created_at,
                 GROUP_CONCAT(irp.product_id) as product_ids,
                 ir.influencer_id as influencer_id
-<<<<<<< HEAD
             FROM oc_influencer_reels ir
             LEFT JOIN oc_influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
             LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
             LEFT JOIN oc_influencer_reel_product irp ON ir.reel_id = irp.reel_id
-=======
-            FROM influencer_reels ir
-            LEFT JOIN influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
-            LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
-            LEFT JOIN influencer_reel_product irp ON ir.reel_id = irp.reel_id
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE ir.reel_id = ?
             GROUP BY ir.reel_id
         `;
@@ -3407,6 +3841,7 @@ const getReelById = async (req, res) => {
                         CASE 
                             WHEN sr.status = 1 THEN 'approved'
                             WHEN sr.status = 0 THEN 'pending'
+                            WHEN sr.status = 2 THEN 'rejected'
                             ELSE 'unknown'
                         END as status,
                         0 as views,
@@ -3414,10 +3849,10 @@ const getReelById = async (req, res) => {
                         sr.date_added as created_at,
                         GROUP_CONCAT(srp.product_id) as product_ids,
                         sr.seller_id as seller_id
-                    FROM seller_reels sr
-                    LEFT JOIN seller_reel_to_category srtc ON sr.reel_id = srtc.reel_id
+                    FROM oc_seller_reels sr
+                    LEFT JOIN oc_seller_reel_to_category srtc ON sr.reel_id = srtc.reel_id
                     LEFT JOIN oc_reel_category orc ON srtc.category_id = orc.reel_category_id
-                    LEFT JOIN seller_reel_product srp ON sr.reel_id = srp.reel_id
+                    LEFT JOIN oc_seller_reel_product srp ON sr.reel_id = srp.reel_id
                     WHERE sr.reel_id = ?
                     GROUP BY sr.reel_id
                 `;
@@ -3432,103 +3867,188 @@ const getReelById = async (req, res) => {
                         });
                     }
                     
-                    if (results.length === 0) {
-                        return res.status(404).json({ 
-                            success: false, 
-                            message: 'Reel not found' 
-                        })
-                    }
-                    
-                    const reel = results[0];
-                    
-                    // Process product IDs
-                    let productIds = [];
-                    if (reel.product_ids) {
-                        // Handle product_ids which might be a comma-separated string or null
-                        if (typeof reel.product_ids === 'string') {
-                            // Split comma-separated string into array of integers
-                            productIds = reel.product_ids.split(',').map(id => {
-                                const numId = parseInt(id.trim());
-                                return isNaN(numId) ? null : numId;
-                            }).filter(id => id !== null);
-                        } else if (Array.isArray(reel.product_ids)) {
-                            // Already an array, ensure all elements are integers
-                            productIds = reel.product_ids.map(id => {
-                                const numId = parseInt(id);
-                                return isNaN(numId) ? null : numId;
-                            }).filter(id => id !== null);
+                        if (results.length === 0) {
+                            // Try brand reel instead
+                            const brandReelQuery = `
+                                SELECT 
+                                    br.id,
+                                    br.brand_id,
+                                    br.category_id,
+                                    c.name as category_name,
+                                    br.product_id,
+                                    br.title,
+                                    br.description,
+                                    br.video_url,
+                                    br.thumbnail_url as thumbnail,
+                                    br.views,
+                                    br.likes,
+                                    br.comments,
+                                    CASE 
+                                        WHEN br.status = 1 THEN 'approved'
+                                        WHEN br.status = 2 THEN 'rejected'
+                                        ELSE 'pending'
+                                    END as status,
+                                    br.created_at,
+                                    'brand' as reel_type
+                                FROM oc_brand_reels br
+                                LEFT JOIN oc_reel_category c ON br.category_id = c.reel_category_id
+                                WHERE br.id = ?
+                            `;
+                            
+                            db.query(brandReelQuery, [id], (brErr, brResults) => {
+                                if (brErr) {
+                                    console.error('Error fetching brand reel:', brErr);
+                                    return res.status(500).json({ 
+                                        success: false, 
+                                        message: 'Error fetching reel',
+                                        error: brErr.message 
+                                    });
+                                }
+                                
+                                if (brResults.length === 0) {
+                                    return res.status(404).json({ 
+                                        success: false, 
+                                        message: 'Reel not found' 
+                                    });
+                                }
+                                
+                                const reel = brResults[0];
+                                
+                                // Get brand name from sagar database
+                                const brandNameQuery = `SELECT name FROM oc_manufacturer WHERE manufacturer_id = ?`;
+                                dbSagar.query(brandNameQuery, [reel.brand_id], (bnErr, bnResults) => {
+                                    const brandName = (bnResults && bnResults.length > 0) ? bnResults[0].name : 'Unknown Brand';
+                                    
+                                    // Get all product IDs from junction table
+                                    const productIdsQuery = `
+                                        SELECT product_id 
+                                        FROM oc_brand_reel_product 
+                                        WHERE reel_id = ?
+                                    `;
+                                    db.query(productIdsQuery, [reel.id], (pidErr, pidResults) => {
+                                    let productIds = [];
+                                        if (!pidErr && pidResults && pidResults.length > 0) {
+                                            productIds = pidResults.map(row => parseInt(row.product_id)).filter(id => !isNaN(id));
+                                        } else if (reel.product_id) {
+                                            // Fallback to single product_id if junction table has no results
+                                        const numId = parseInt(reel.product_id);
+                                        if (!isNaN(numId)) {
+                                            productIds = [numId];
+                                        }
+                                    }
+                                    
+                                    // Construct full URLs for video and thumbnail
+                                    const baseUrl = `${req.protocol}://${req.get('host')}`;
+                                    const fullReel = {
+                                        ...reel,
+                                        product_ids: productIds,
+                                        brand_name: brandName,
+                                        thumbnail: reel.thumbnail || reel.thumbnail_url
+                                    };
+                                    
+                                    // Add full URLs if paths exist (handle Azure URLs)
+                                    if (reel.video_url) {
+                                        fullReel.video_url = reel.video_url.startsWith('http') ? appendSAS(reel.video_url) : `${baseUrl}${reel.video_url}`;
+                                    }
+                                    if (fullReel.thumbnail) {
+                                        fullReel.thumbnail = fullReel.thumbnail.startsWith('http') ? fullReel.thumbnail : `${baseUrl}${fullReel.thumbnail}`;
+                                    }
+                                    
+                                    return res.status(200).json({
+                                        success: true,
+                                        data: fullReel
+                                        });
+                                    });
+                                });
+                            });
                         } else {
-                            // Single value, convert to array
-                            const numId = parseInt(reel.product_ids);
-                            productIds = isNaN(numId) ? [] : [numId];
-                        }
-                    }
-                    
-                    // Construct full URLs for video and thumbnail
-                    const baseUrl = `${req.protocol}://${req.get('host')}`;
-                    const fullReel = {
-                        ...reel,
-                        product_ids: productIds,
-                        seller_id: reel.seller_id
-                    };
-                    
-                    // Add full URLs if paths exist
-                    if (reel.video_url) {
-                        // Check if it's already a full URL
-                        if (reel.video_url.startsWith('http')) {
-<<<<<<< HEAD
-                            fullReel.video_url = appendSAS(reel.video_url);
-                        } else {
-                            // For relative paths like /uploads/filename, we need to ensure they're accessible
-                            // The uploads are served at /uploads, not /api/studio/reels/uploads
-                            fullReel.video_url = appendSAS(
-                                reel.video_url.startsWith('/uploads') ? 
-                                    `http://localhost:3189${reel.video_url}` : 
-                                    `${baseUrl}${reel.video_url}`
-                            );
-=======
-                            fullReel.video_url = reel.video_url;
-                        } else {
-                            // For relative paths like /uploads/filename, we need to ensure they're accessible
-                            // The uploads are served at /uploads, not /api/studio/reels/uploads
-                            fullReel.video_url = reel.video_url.startsWith('/uploads') ? 
-                                `http://localhost:3189${reel.video_url}` : 
-                                `${baseUrl}${reel.video_url}`;
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
-                        }
-                    }
-                    if (reel.thumbnail) {
-                        // Check if it's already a full URL
-                        if (reel.thumbnail.startsWith('http')) {
-                            fullReel.thumbnail = reel.thumbnail;
-                        } else {
-                            // For relative paths like /uploads/filename, we need to ensure they're accessible
-                            // The uploads are served at /uploads, not /api/studio/reels/uploads
-                            fullReel.thumbnail = reel.thumbnail.startsWith('/uploads') ? 
-                                `http://localhost:3189${reel.thumbnail}` : 
-                                `${baseUrl}${reel.thumbnail}`;
-                        }
-                    }
-                    
-                    if ((!fullReel.brand_id || fullReel.brand_id === null) && productIds.length > 0) {
-                        const firstProductId = productIds[0];
-                        const brandLookupQuery = `SELECT manufacturer_id FROM oc_product WHERE product_id = ?`;
-                        dbSagar.query(brandLookupQuery, [firstProductId], (bErr, bRows) => {
-                            if (!bErr && bRows && bRows.length > 0) {
-                                fullReel.brand_id = bRows[0].manufacturer_id || null;
+                            const reel = results[0];
+                            
+                            // Get all product IDs from junction table (more reliable than GROUP_CONCAT)
+                            const productIdsQuery = `
+                                SELECT product_id 
+                                FROM oc_seller_reel_product 
+                                WHERE reel_id = ?
+                            `;
+                            db.query(productIdsQuery, [reel.reel_id || reel.id], (pidErr, pidResults) => {
+                            let productIds = [];
+                                if (!pidErr && pidResults && pidResults.length > 0) {
+                                    productIds = pidResults.map(row => parseInt(row.product_id)).filter(id => !isNaN(id));
+                                } else if (reel.product_ids) {
+                                    // Fallback to GROUP_CONCAT result if junction table has no results
+                                if (typeof reel.product_ids === 'string') {
+                                    productIds = reel.product_ids.split(',').map(id => {
+                                        const numId = parseInt(id.trim());
+                                        return isNaN(numId) ? null : numId;
+                                    }).filter(id => id !== null);
+                                } else if (Array.isArray(reel.product_ids)) {
+                                    productIds = reel.product_ids.map(id => {
+                                        const numId = parseInt(id);
+                                        return isNaN(numId) ? null : numId;
+                                    }).filter(id => id !== null);
+                                }
                             }
-                            return res.status(200).json({
-                                success: true,
-                                data: fullReel
-                            })
-                        });
-                    } else {
-                        return res.status(200).json({
-                            success: true,
-                            data: fullReel
-                        })
-                    }
-                })
+                            
+                            // Construct full URLs for video and thumbnail
+                            const baseUrl = `${req.protocol}://${req.get('host')}`;
+                            const fullReel = {
+                                ...reel,
+                                product_ids: productIds,
+                                seller_id: reel.seller_id
+                            };
+                            
+                            // Add full URLs if paths exist
+                            if (reel.video_url) {
+                                // Check if it's already a full URL (Azure or external)
+                                if (reel.video_url.startsWith('http')) {
+                                    fullReel.video_url = appendSAS(reel.video_url);
+                                } else {
+                                    // For relative paths like /uploads/filename, construct full URL
+                                    // Local URLs don't need SAS tokens
+                                    if (reel.video_url.startsWith('/uploads')) {
+                                        // Local upload - construct full URL without SAS token
+                                        fullReel.video_url = `${baseUrl}${reel.video_url}`;
+                                    } else {
+                                        // Other relative paths - construct full URL and check if Azure
+                                        const fullUrl = `${baseUrl}${reel.video_url}`;
+                                        fullReel.video_url = appendSAS(fullUrl);
+                                    }
+                                }
+                            }
+                            if (reel.thumbnail) {
+                                // Check if it's already a full URL
+                                if (reel.thumbnail.startsWith('http')) {
+                                    fullReel.thumbnail = reel.thumbnail;
+                                } else {
+                                    // For relative paths like /uploads/filename, we need to ensure they're accessible
+                                    // The uploads are served at /uploads, not /api/studio/reels/uploads
+                                    fullReel.thumbnail = reel.thumbnail.startsWith('/uploads') ? 
+                                        `http://localhost:3189${reel.thumbnail}` : 
+                                        `${baseUrl}${reel.thumbnail}`;
+                                }
+                            }
+                            
+                            if ((!fullReel.brand_id || fullReel.brand_id === null) && productIds.length > 0) {
+                                const firstProductId = productIds[0];
+                                const brandLookupQuery = `SELECT manufacturer_id FROM oc_product WHERE product_id = ?`;
+                                dbSagar.query(brandLookupQuery, [firstProductId], (bErr, bRows) => {
+                                    if (!bErr && bRows && bRows.length > 0) {
+                                        fullReel.brand_id = bRows[0].manufacturer_id || null;
+                                    }
+                                    return res.status(200).json({
+                                        success: true,
+                                        data: fullReel
+                                    })
+                                });
+                            } else {
+                                return res.status(200).json({
+                                    success: true,
+                                    data: fullReel
+                                })
+                            }
+                            });
+                        }
+                    })
             } else {
                 if (results.length === 0) {
                     // Try seller reel instead
@@ -3545,6 +4065,7 @@ const getReelById = async (req, res) => {
                             CASE 
                                 WHEN sr.status = 1 THEN 'approved'
                                 WHEN sr.status = 0 THEN 'pending'
+                                WHEN sr.status = 2 THEN 'rejected'
                                 ELSE 'unknown'
                             END as status,
                             0 as views,
@@ -3552,10 +4073,10 @@ const getReelById = async (req, res) => {
                             sr.date_added as created_at,
                             GROUP_CONCAT(srp.product_id) as product_ids,
                             sr.seller_id as seller_id
-                        FROM seller_reels sr
-                        LEFT JOIN seller_reel_to_category srtc ON sr.reel_id = srtc.reel_id
+                        FROM oc_seller_reels sr
+                        LEFT JOIN oc_seller_reel_to_category srtc ON sr.reel_id = srtc.reel_id
                         LEFT JOIN oc_reel_category orc ON srtc.category_id = orc.reel_category_id
-                        LEFT JOIN seller_reel_product srp ON sr.reel_id = srp.reel_id
+                        LEFT JOIN oc_seller_reel_product srp ON sr.reel_id = srp.reel_id
                         WHERE sr.reel_id = ?
                         GROUP BY sr.reel_id
                     `;
@@ -3571,57 +4092,158 @@ const getReelById = async (req, res) => {
                         }
                         
                         if (results.length === 0) {
-                            return res.status(404).json({ 
-                                success: false, 
-                                message: 'Reel not found' 
-                            })
-                        }
-                        
-                        const reel = results[0];
-                        
-                        // Process product IDs
-                        let productIds = [];
-                        if (reel.product_ids) {
-                            // Handle product_ids which might be a comma-separated string or null
-                            if (typeof reel.product_ids === 'string') {
-                                // Split comma-separated string into array of integers
-                                productIds = reel.product_ids.split(',').map(id => {
-                                    const numId = parseInt(id.trim());
-                                    return isNaN(numId) ? null : numId;
-                                }).filter(id => id !== null);
-                            } else if (Array.isArray(reel.product_ids)) {
-                                // Already an array, ensure all elements are integers
-                                productIds = reel.product_ids.map(id => {
-                                    const numId = parseInt(id);
-                                    return isNaN(numId) ? null : numId;
-                                }).filter(id => id !== null);
-                            } else {
-                                // Single value, convert to array
-                                const numId = parseInt(reel.product_ids);
-                                productIds = isNaN(numId) ? [] : [numId];
+                            // Try brand reel instead
+                            const brandReelQuery = `
+                                SELECT 
+                                    br.id,
+                                    br.brand_id,
+                                    br.category_id,
+                                    c.name as category_name,
+                                    br.product_id,
+                                    br.title,
+                                    br.description,
+                                    br.video_url,
+                                    br.thumbnail_url as thumbnail,
+                                    br.views,
+                                    br.likes,
+                                    br.comments,
+                                    CASE 
+                                        WHEN br.status = 1 THEN 'approved'
+                                        WHEN br.status = 2 THEN 'rejected'
+                                        ELSE 'pending'
+                                    END as status,
+                                    br.created_at,
+                                    'brand' as reel_type
+                                FROM oc_brand_reels br
+                                LEFT JOIN oc_reel_category c ON br.category_id = c.reel_category_id
+                                WHERE br.id = ?
+                            `;
+                            
+                            db.query(brandReelQuery, [id], (brErr, brResults) => {
+                                if (brErr) {
+                                    console.error('Error fetching brand reel:', brErr);
+                                    return res.status(500).json({ 
+                                        success: false, 
+                                        message: 'Error fetching reel',
+                                        error: brErr.message 
+                                    });
+                                }
+                                
+                                if (brResults.length === 0) {
+                                    return res.status(404).json({ 
+                                        success: false, 
+                                        message: 'Reel not found' 
+                                    });
+                                }
+                                
+                                const reel = brResults[0];
+                                
+                                // Get brand name from sagar database
+                                const brandNameQuery = `SELECT name FROM oc_manufacturer WHERE manufacturer_id = ?`;
+                                dbSagar.query(brandNameQuery, [reel.brand_id], (bnErr, bnResults) => {
+                                    const brandName = (bnResults && bnResults.length > 0) ? bnResults[0].name : 'Unknown Brand';
+                                    
+                                    // Get all product IDs from junction table
+                                    const productIdsQuery = `
+                                        SELECT product_id 
+                                        FROM oc_brand_reel_product 
+                                        WHERE reel_id = ?
+                                    `;
+                                    db.query(productIdsQuery, [reel.id], (pidErr, pidResults) => {
+                                    let productIds = [];
+                                        if (!pidErr && pidResults && pidResults.length > 0) {
+                                            productIds = pidResults.map(row => parseInt(row.product_id)).filter(id => !isNaN(id));
+                                        } else if (reel.product_id) {
+                                            // Fallback to single product_id if junction table has no results
+                                        const numId = parseInt(reel.product_id);
+                                        if (!isNaN(numId)) {
+                                            productIds = [numId];
+                                        }
+                                    }
+                                    
+                                    // Construct full URLs for video and thumbnail
+                                    const baseUrl = `${req.protocol}://${req.get('host')}`;
+                                    const fullReel = {
+                                        ...reel,
+                                        product_ids: productIds,
+                                        brand_name: brandName,
+                                        thumbnail: reel.thumbnail || reel.thumbnail_url
+                                    };
+                                    
+                                    // Add full URLs if paths exist (handle Azure URLs)
+                                    if (reel.video_url) {
+                                        fullReel.video_url = reel.video_url.startsWith('http') ? appendSAS(reel.video_url) : `${baseUrl}${reel.video_url}`;
+                                    }
+                                    if (fullReel.thumbnail) {
+                                        fullReel.thumbnail = fullReel.thumbnail.startsWith('http') ? fullReel.thumbnail : `${baseUrl}${fullReel.thumbnail}`;
+                                    }
+                                    
+                                    return res.status(200).json({
+                                        success: true,
+                                        data: fullReel
+                                        });
+                                    });
+                                });
+                            });
+                        } else {
+                            const reel = results[0];
+                            
+                            // Process product IDs
+                            let productIds = [];
+                            if (reel.product_ids) {
+                                // Handle product_ids which might be a comma-separated string or null
+                                if (typeof reel.product_ids === 'string') {
+                                    // Split comma-separated string into array of integers
+                                    productIds = reel.product_ids.split(',').map(id => {
+                                        const numId = parseInt(id.trim());
+                                        return isNaN(numId) ? null : numId;
+                                    }).filter(id => id !== null);
+                                } else if (Array.isArray(reel.product_ids)) {
+                                    // Already an array, ensure all elements are integers
+                                    productIds = reel.product_ids.map(id => {
+                                        const numId = parseInt(id);
+                                        return isNaN(numId) ? null : numId;
+                                    }).filter(id => id !== null);
+                                } else {
+                                    // Single value, convert to array
+                                    const numId = parseInt(reel.product_ids);
+                                    productIds = isNaN(numId) ? [] : [numId];
+                                }
                             }
+                            
+                            // Construct full URLs for video and thumbnail
+                            const baseUrl = `${req.protocol}://${req.get('host')}`;
+                            const fullReel = {
+                                ...reel,
+                                product_ids: productIds,
+                                seller_id: reel.seller_id
+                            };
+                            
+                            // Add full URLs if paths exist
+                            if (reel.video_url) {
+                                // Check if it's already a full URL (Azure URL)
+                                if (reel.video_url.startsWith('http')) {
+                                    fullReel.video_url = appendSAS(reel.video_url);
+                                } else {
+                                    // For relative paths, construct full URL and append SAS token if it's an Azure URL
+                                    const fullUrl = `${baseUrl}${reel.video_url}`;
+                                    // Check if it's an Azure URL pattern (even if relative)
+                                    if (reel.video_url.includes('blob.core.windows.net') || fullUrl.includes('blob.core.windows.net')) {
+                                        fullReel.video_url = appendSAS(fullUrl);
+                                    } else {
+                                        fullReel.video_url = fullUrl;
+                                    }
+                                }
+                            }
+                            if (reel.thumbnail) {
+                                fullReel.thumbnail = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
+                            }
+                            
+                            return res.status(200).json({
+                                success: true,
+                                data: fullReel
+                            });
                         }
-                        
-                        // Construct full URLs for video and thumbnail
-                        const baseUrl = `${req.protocol}://${req.get('host')}`;
-                        const fullReel = {
-                            ...reel,
-                            product_ids: productIds,
-                            seller_id: reel.seller_id
-                        };
-                        
-                        // Add full URLs if paths exist
-                        if (reel.video_url) {
-                            fullReel.video_url = reel.video_url.startsWith('http') ? reel.video_url : `${baseUrl}${reel.video_url}`;
-                        }
-                        if (reel.thumbnail) {
-                            fullReel.thumbnail = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
-                        }
-                        
-                        return res.status(200).json({
-                            success: true,
-                            data: fullReel
-                        })
                     })
                 } else {
                     const reel = results[0];
@@ -3659,7 +4281,21 @@ const getReelById = async (req, res) => {
                     
                     // Add full URLs if paths exist
                     if (reel.video_url) {
-                        fullReel.video_url = reel.video_url.startsWith('http') ? reel.video_url : `${baseUrl}${reel.video_url}`;
+                        console.log('Retrieving influencer reel video URL:', reel.video_url.substring(0, 100) + '...');
+                        // Check if it's already a full URL (Azure or external)
+                        if (reel.video_url.startsWith('http')) {
+                            fullReel.video_url = appendSAS(reel.video_url);
+                            if (isAzureBlobUrl(fullReel.video_url)) {
+                                console.log('Azure video URL after appending SAS:', fullReel.video_url.substring(0, 100) + '...');
+                            }
+                        } else {
+                            // For relative paths, construct full URL
+                            // appendSAS will handle whether it needs a SAS token or not
+                            const fullUrl = `${baseUrl}${reel.video_url}`;
+                            fullReel.video_url = appendSAS(fullUrl);
+                        }
+                    } else {
+                        console.warn('No video_url found for influencer reel ID:', id);
                     }
                     if (reel.thumbnail) {
                         fullReel.thumbnail = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
@@ -3682,11 +4318,7 @@ const getReelById = async (req, res) => {
     }
 };
 
-<<<<<<< HEAD
 // Get all brand reels (combines oc_brand_reels and oc_seller_reels with brand_id)
-=======
-// Get all brand reels (combines brand_reels and seller_reels with brand_id)
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
 // Added by Vaishnavi
 const getBrandReels = async (req, res) => {
     try {
@@ -3713,11 +4345,7 @@ const getBrandReels = async (req, res) => {
                 manufacturerMap[manufacturer.id] = manufacturer.name;
             });
 
-<<<<<<< HEAD
             // Query to fetch brand reels from oc_brand_reels table
-=======
-            // Query to fetch brand reels from brand_reels table
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             const brandReelsQuery = `
                 SELECT 
                     br.id,
@@ -3733,16 +4361,15 @@ const getBrandReels = async (req, res) => {
                     br.views,
                     br.likes,
                     br.comments,
-                    br.status,
+                    CASE 
+                        WHEN br.status = 1 THEN 'approved'
+                        WHEN br.status = 2 THEN 'rejected'
+                        ELSE 'pending'
+                    END as status,
                     br.created_at,
                     'brand' as reel_type
-<<<<<<< HEAD
                 FROM oc_brand_reels br
-=======
-                FROM brand_reels br
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 LEFT JOIN oc_reel_category c ON br.category_id = c.reel_category_id
-                WHERE br.status = 'approved'
             `;
 
             // Execute brand reels query
@@ -3786,7 +4413,7 @@ const getBrandReels = async (req, res) => {
                         END as status,
                         sr.date_added as created_at,
                         'seller' as reel_type
-                    FROM seller_reels sr
+                    FROM oc_seller_reels sr
                     LEFT JOIN oc_sellers s ON sr.seller_id = s.vendor_id
                     WHERE sr.status = 1
                 `;
@@ -3866,44 +4493,28 @@ const getSellerDashboardStats = async (req, res) => {
             // Get total reels count
             const totalReelsQuery = `
                 SELECT COUNT(*) as totalReels
-<<<<<<< HEAD
                 FROM oc_seller_reels
-=======
-                FROM seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 WHERE seller_id = ?
             `;
             
             // Get approved reels count
             const approvedReelsQuery = `
                 SELECT COUNT(*) as approvedReels
-<<<<<<< HEAD
                 FROM oc_seller_reels
-=======
-                FROM seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 WHERE seller_id = ? AND status = 1
             `;
             
             // Get pending reels count
             const pendingReelsQuery = `
                 SELECT COUNT(*) as pendingReels
-<<<<<<< HEAD
                 FROM oc_seller_reels
-=======
-                FROM seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 WHERE seller_id = ? AND status = 0
             `;
             
             // Get rejected reels count
             const rejectedReelsQuery = `
                 SELECT COUNT(*) as rejectedReels
-<<<<<<< HEAD
                 FROM oc_seller_reels
-=======
-                FROM seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
                 WHERE seller_id = ? AND status = 2
             `;
             
@@ -3987,6 +4598,53 @@ const getSellerDashboardStats = async (req, res) => {
     }
 };
 
+const deleteBrandReel = async (req, res) => {
+    const { id } = req.params;
+    if (!id) {
+        return res.status(400).json({ success: false, message: 'Reel ID is required' });
+    }
+    try {
+        db.getConnection((err, connection) => {
+            if (err) {
+                return res.status(500).json({ success: false, message: 'Database connection error' });
+            }
+            connection.beginTransaction(err => {
+                if (err) {
+                    connection.release();
+                    return res.status(500).json({ success: false, message: 'Transaction error' });
+                }
+                const q = `DELETE FROM oc_brand_reels WHERE id = ?`;
+                connection.query(q, [id], (err, result) => {
+                    if (err) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            return res.status(500).json({ success: false, message: 'Error deleting reel', error: err.message });
+                        });
+                    }
+                    if ((result.affectedRows || 0) === 0) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            return res.status(404).json({ success: false, message: 'Reel not found' });
+                        });
+                    }
+                    connection.commit(err => {
+                        if (err) {
+                            return connection.rollback(() => {
+                                connection.release();
+                                return res.status(500).json({ success: false, message: 'Error deleting reel' });
+                            });
+                        }
+                        connection.release();
+                        return res.status(200).json({ success: true, message: 'Reel deleted successfully' });
+                    });
+                });
+            });
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: 'Failed to delete reel', error: error.message });
+    }
+};
+
 // Get recent seller reels for dashboard
 const getRecentSellerReels = async (req, res) => {
     const { vendorId } = req.params;
@@ -4043,10 +4701,10 @@ const getRecentSellerReels = async (req, res) => {
                     sr.video_url,
                     sr.thumbnail,
                     GROUP_CONCAT(srp.product_id) as product_ids
-                FROM seller_reels sr
-                LEFT JOIN seller_reel_to_category srtc ON sr.reel_id = srtc.reel_id
+                FROM oc_seller_reels sr
+                LEFT JOIN oc_seller_reel_to_category srtc ON sr.reel_id = srtc.reel_id
                 LEFT JOIN oc_reel_category orc ON srtc.category_id = orc.reel_category_id
-                LEFT JOIN seller_reel_product srp ON sr.reel_id = srp.reel_id
+                LEFT JOIN oc_seller_reel_product srp ON sr.reel_id = srp.reel_id
                 WHERE sr.seller_id = ?
                 GROUP BY sr.reel_id
                 ORDER BY sr.date_added DESC
@@ -4133,22 +4791,14 @@ const getApprovedReelsCount = async (req, res) => {
         // Get approved seller reels count
         const sellerApprovedQuery = `
             SELECT COUNT(*) as approvedReels
-<<<<<<< HEAD
             FROM oc_seller_reels
-=======
-            FROM seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 1
         `;
         
         // Get approved influencer reels count
         const influencerApprovedQuery = `
             SELECT COUNT(*) as approvedReels
-<<<<<<< HEAD
             FROM oc_influencer_reels
-=======
-            FROM influencer_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 1
         `;
         
@@ -4167,127 +4817,79 @@ const getApprovedReelsCount = async (req, res) => {
         // Get today's approved reels count for seller reels
         const todaySellerApprovedQuery = `
             SELECT COUNT(*) as todayApprovedReels
-<<<<<<< HEAD
             FROM oc_seller_reels
-=======
-            FROM seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 1 AND DATE(date_added) = CURDATE()
         `;
         
         // Get today's approved reels count for influencer reels
         const todayInfluencerApprovedQuery = `
             SELECT COUNT(*) as todayApprovedReels
-<<<<<<< HEAD
             FROM oc_influencer_reels
-=======
-            FROM influencer_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 1 AND DATE(date_added) = CURDATE()
         `;        
         // Get today's pending reels count for seller reels
         const todaySellerPendingQuery = `
             SELECT COUNT(*) as todayPendingReels
-<<<<<<< HEAD
             FROM oc_seller_reels
-=======
-            FROM seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 0 AND DATE(date_added) = CURDATE()
         `;
         
         // Get today's pending reels count for influencer reels
         const todayInfluencerPendingQuery = `
             SELECT COUNT(*) as todayPendingReels
-<<<<<<< HEAD
             FROM oc_influencer_reels
-=======
-            FROM influencer_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 0 AND DATE(date_added) = CURDATE()
         `;        
         // Get today's rejected reels count for seller reels
         const todaySellerRejectedQuery = `
             SELECT COUNT(*) as todayRejectedReels
-<<<<<<< HEAD
             FROM oc_seller_reels
-=======
-            FROM seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 2 AND DATE(date_added) = CURDATE()
         `;
         
         // Get today's rejected reels count for influencer reels
         const todayInfluencerRejectedQuery = `
             SELECT COUNT(*) as todayRejectedReels
-<<<<<<< HEAD
             FROM oc_influencer_reels
-=======
-            FROM influencer_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 2 AND DATE(date_added) = CURDATE()
         `;        
         // Get total reels count for seller reels
         const totalSellerReelsQuery = `
             SELECT COUNT(*) as totalReels
-<<<<<<< HEAD
             FROM oc_seller_reels
-=======
-            FROM seller_reels
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         `;
         
         // Get total reels count for influencer reels
         const totalInfluencerReelsQuery = `
             SELECT COUNT(*) as totalReels
-<<<<<<< HEAD
             FROM oc_influencer_reels
-=======
-            FROM influencer_reels
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         `;
         
         // Get pending reels count for seller reels
         const pendingSellerReelsQuery = `
             SELECT COUNT(*) as pendingReels
-<<<<<<< HEAD
             FROM oc_seller_reels
-=======
-            FROM seller_reels
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 0
         `;
         
         // Get pending reels count for influencer reels
         const pendingInfluencerReelsQuery = `
             SELECT COUNT(*) as pendingReels
-<<<<<<< HEAD
             FROM oc_influencer_reels
-=======
-            FROM influencer_reels
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 0
         `;
         
         // Get rejected reels count for seller reels
         const rejectedSellerReelsQuery = `
             SELECT COUNT(*) as rejectedReels
-<<<<<<< HEAD
             FROM oc_seller_reels
-=======
-            FROM seller_reels
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 2
         `;
         
         // Get rejected reels count for influencer reels
         const rejectedInfluencerReelsQuery = `
             SELECT COUNT(*) as rejectedReels
-<<<<<<< HEAD
             FROM oc_influencer_reels
-=======
-            FROM influencer_reels
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
             WHERE status = 2
         `;
         
@@ -4518,6 +5120,65 @@ const getApprovedReelsCount = async (req, res) => {
     }
 };
 
+// Get recent approved reels across sellers and influencers for dashboard
+const getRecentApprovedReels = async (req, res) => {
+    const limit = Number(req.query.limit) || 8;
+    try {
+        const query = `
+            SELECT * FROM (
+                SELECT 
+                    sr.reel_id,
+                    sr.title,
+                    'seller' AS reel_type,
+                    CONCAT(s.firstname, ' ', s.lastname) AS owner_name,
+                    sr.status,
+                    sr.date_added
+                FROM oc_seller_reels sr
+                JOIN oc_sellers s ON sr.seller_id = s.vendor_id
+                WHERE sr.status = 1
+                
+                UNION ALL
+                
+                SELECT 
+                    ir.reel_id,
+                    ir.title,
+                    'influencer' AS reel_type,
+                    CONCAT(oi.firstname, ' ', oi.lastname) AS owner_name,
+                    ir.status,
+                    ir.date_added
+                FROM oc_influencer_reels ir
+                JOIN oc_influencers oi ON ir.influencer_id = oi.id
+                WHERE ir.status = 1
+            ) AS combined
+            ORDER BY date_added DESC
+            LIMIT ?
+        `;
+
+        db.query(query, [limit], (err, results) => {
+            if (err) {
+                console.error('Error fetching recent approved reels:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Error fetching recent approved reels',
+                    error: err.message
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                data: results
+            });
+        });
+    } catch (error) {
+        console.error('Get recent approved reels error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch recent approved reels',
+            error: error.message
+        });
+    }
+};
+
 // Approve a seller reel
 const approveSellerReel = async (req, res) => {
     try {
@@ -4530,37 +5191,171 @@ const approveSellerReel = async (req, res) => {
             });
         }
         
-        // Update the status to approved (1)
-        const query = `
-<<<<<<< HEAD
-            UPDATE oc_seller_reels
-=======
-            UPDATE seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
-            SET status = 1, date_modified = CURRENT_TIMESTAMP 
-            WHERE reel_id = ?
-        `;
+        console.log('=== APPROVE SELLER REEL ENDPOINT CALLED ===');
+        console.log('Reel ID:', id);
         
-        db.query(query, [id], (err, result) => {
-            if (err) {
-                console.error('Error approving seller reel:', err);
+        // First, fetch reel data
+        const reelQuery = `SELECT reel_id, title, seller_id FROM oc_seller_reels WHERE reel_id = ?`;
+        
+        db.query(reelQuery, [id], async (reelErr, reelResults) => {
+            if (reelErr) {
+                console.error('Error fetching seller reel:', reelErr);
                 return res.status(500).json({
                     success: false,
-                    message: 'Failed to approve reel',
-                    error: err.message
+                    message: 'Error fetching reel information',
+                    error: reelErr.message
                 });
             }
             
-            if (result.affectedRows === 0) {
+            if (reelResults.length === 0) {
                 return res.status(404).json({
                     success: false,
                     message: 'Reel not found'
                 });
             }
             
-            res.json({
-                success: true,
-                message: 'Reel approved successfully'
+            const reel = reelResults[0];
+            console.log('Fetched reel:', { reel_id: reel.reel_id, title: reel.title, seller_id: reel.seller_id });
+            
+            // Fetch seller data from dbSagar (oc_vendor is in sagar database)
+            const sellerQuery = `
+                SELECT 
+                    vendor_id,
+                    firstname,
+                    lastname,
+                    email,
+                    telephone
+                FROM oc_vendor
+                WHERE vendor_id = ?
+            `;
+            
+            dbSagar.query(sellerQuery, [reel.seller_id], async (fetchErr, fetchResults) => {
+                if (fetchErr) {
+                    console.error('Error fetching seller data:', fetchErr);
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Error fetching seller information',
+                        error: fetchErr.message
+                    });
+                }
+                
+                if (fetchResults.length === 0) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Seller not found'
+                    });
+                }
+                
+                const seller = fetchResults[0];
+                
+                // Get phone number - try telephone, mobile, or phone fields
+                const phoneNumber = seller.telephone || seller.mobile || seller.phone || null;
+                
+                console.log('Raw seller data from database:', JSON.stringify(seller, null, 2));
+                console.log('Extracted phone number:', phoneNumber);
+                console.log('Phone number fields available:', {
+                    telephone: seller.telephone,
+                    mobile: seller.mobile,
+                    phone: seller.phone
+                });
+                
+                const reelData = {
+                    reel_id: reel.reel_id,
+                    title: reel.title,
+                    vendor_id: seller.vendor_id,
+                    firstname: seller.firstname,
+                    lastname: seller.lastname,
+                    email: seller.email,
+                    telephone: phoneNumber  // Use the extracted phone number
+                };
+                
+                console.log('Fetched seller data for notification:', {
+                    reel_id: reelData.reel_id,
+                    title: reelData.title,
+                    vendor_id: reelData.vendor_id,
+                    name: `${reelData.firstname} ${reelData.lastname}`,
+                    phone: reelData.telephone,
+                    email: reelData.email
+                });
+                
+                // Validate phone number before proceeding
+                if (!reelData.telephone || reelData.telephone.trim() === '') {
+                    console.error('❌ CRITICAL: Phone number is missing or empty for seller:', reelData.vendor_id);
+                    console.error('Cannot send WhatsApp notification without phone number');
+                    // Continue with the approval/rejection but log the issue
+                }
+            
+            // Update the status to approved (1)
+            const updateQuery = `
+                UPDATE oc_seller_reels
+                SET status = 1, date_modified = CURRENT_TIMESTAMP 
+                WHERE reel_id = ?
+            `;
+            
+            db.query(updateQuery, [id], async (err, result) => {
+                if (err) {
+                    console.error('Error approving seller reel:', err);
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Failed to approve reel',
+                        error: err.message
+                    });
+                }
+                
+                if (result.affectedRows === 0) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Reel not found'
+                    });
+                }
+                
+                console.log('✅✅✅ Reel approved successfully. Starting WhatsApp notification process...');
+                console.log('📊 Reel data being sent to notification service:');
+                console.log(JSON.stringify(reelData, null, 2));
+                console.log('📞 Phone number in reelData.telephone:', reelData.telephone);
+                console.log('📞 Phone number type:', typeof reelData.telephone);
+                console.log('📞 Phone number length:', reelData.telephone ? reelData.telephone.length : 'null/undefined');
+                
+                // Send WhatsApp notification
+                try {
+                    console.log('🔔 Loading notification service module...');
+                    const { sendSellerReelApprovalNotification } = require('../../Services/Notifications/notificationService');
+                    console.log('🔔 Notification function loaded. Calling sendSellerReelApprovalNotification...');
+                    
+                    const notificationResult = await sendSellerReelApprovalNotification(reelData);
+                    
+                    console.log('✅✅✅ WhatsApp reel approval notification COMPLETED');
+                    console.log('📬 Notification result:', JSON.stringify(notificationResult, null, 2));
+                    
+                    if (!notificationResult || !notificationResult.success) {
+                        console.error('⚠️⚠️⚠️ Notification returned unsuccessful or no result');
+                        console.error('Result object:', notificationResult);
+                        console.error('Error message:', notificationResult?.message || notificationResult?.error || 'Unknown error');
+                    } else {
+                        console.log('✅✅✅ Notification sent successfully!');
+                    }
+                } catch (notifError) {
+                    console.error('❌❌❌ EXCEPTION occurred while sending WhatsApp notification for reel approval');
+                    console.error('❌ Error type:', notifError?.constructor?.name || 'Unknown');
+                    console.error('❌ Error message:', notifError?.message || 'No message');
+                    console.error('❌ Error stack:', notifError?.stack || 'No stack trace');
+                    if (notifError?.response) {
+                        console.error('❌ HTTP Status:', notifError.response.status);
+                        console.error('❌ Response Data:', JSON.stringify(notifError.response.data, null, 2));
+                    }
+                    if (notifError?.request) {
+                        console.error('❌ Request was made but no response received');
+                    }
+                    // Don't fail the request if notification fails
+                }
+                
+                console.log('✅✅✅ Notification process finished (regardless of success/failure)');
+                
+                res.json({
+                    success: true,
+                    message: 'Reel approved successfully'
+                });
+            });
             });
         });
     } catch (error) {
@@ -4584,37 +5379,171 @@ const rejectSellerReel = async (req, res) => {
             });
         }
         
-        // Update the status to rejected (2)
-        const query = `
-<<<<<<< HEAD
-            UPDATE oc_seller_reels
-=======
-            UPDATE seller_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
-            SET status = 2, date_modified = CURRENT_TIMESTAMP 
-            WHERE reel_id = ?
-        `;
+        console.log('=== REJECT SELLER REEL ENDPOINT CALLED ===');
+        console.log('Reel ID:', id);
         
-        db.query(query, [id], (err, result) => {
-            if (err) {
-                console.error('Error rejecting seller reel:', err);
+        // First, fetch reel data
+        const reelQuery = `SELECT reel_id, title, seller_id FROM oc_seller_reels WHERE reel_id = ?`;
+        
+        db.query(reelQuery, [id], async (reelErr, reelResults) => {
+            if (reelErr) {
+                console.error('Error fetching seller reel:', reelErr);
                 return res.status(500).json({
                     success: false,
-                    message: 'Failed to reject reel',
-                    error: err.message
+                    message: 'Error fetching reel information',
+                    error: reelErr.message
                 });
             }
             
-            if (result.affectedRows === 0) {
+            if (reelResults.length === 0) {
                 return res.status(404).json({
                     success: false,
                     message: 'Reel not found'
                 });
             }
             
-            res.json({
-                success: true,
-                message: 'Reel rejected successfully'
+            const reel = reelResults[0];
+            console.log('Fetched reel:', { reel_id: reel.reel_id, title: reel.title, seller_id: reel.seller_id });
+            
+            // Fetch seller data from dbSagar (oc_vendor is in sagar database)
+            const sellerQuery = `
+                SELECT 
+                    vendor_id,
+                    firstname,
+                    lastname,
+                    email,
+                    telephone
+                FROM oc_vendor
+                WHERE vendor_id = ?
+            `;
+            
+            dbSagar.query(sellerQuery, [reel.seller_id], async (fetchErr, fetchResults) => {
+                if (fetchErr) {
+                    console.error('Error fetching seller data:', fetchErr);
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Error fetching seller information',
+                        error: fetchErr.message
+                    });
+                }
+                
+                if (fetchResults.length === 0) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Seller not found'
+                    });
+                }
+                
+                const seller = fetchResults[0];
+                
+                // Get phone number - try telephone, mobile, or phone fields
+                const phoneNumber = seller.telephone || seller.mobile || seller.phone || null;
+                
+                console.log('Raw seller data from database:', JSON.stringify(seller, null, 2));
+                console.log('Extracted phone number:', phoneNumber);
+                console.log('Phone number fields available:', {
+                    telephone: seller.telephone,
+                    mobile: seller.mobile,
+                    phone: seller.phone
+                });
+                
+                const reelData = {
+                    reel_id: reel.reel_id,
+                    title: reel.title,
+                    vendor_id: seller.vendor_id,
+                    firstname: seller.firstname,
+                    lastname: seller.lastname,
+                    email: seller.email,
+                    telephone: phoneNumber  // Use the extracted phone number
+                };
+                
+                console.log('Fetched seller data for notification:', {
+                    reel_id: reelData.reel_id,
+                    title: reelData.title,
+                    vendor_id: reelData.vendor_id,
+                    name: `${reelData.firstname} ${reelData.lastname}`,
+                    phone: reelData.telephone,
+                    email: reelData.email
+                });
+                
+                // Validate phone number before proceeding
+                if (!reelData.telephone || reelData.telephone.trim() === '') {
+                    console.error('❌ CRITICAL: Phone number is missing or empty for seller:', reelData.vendor_id);
+                    console.error('Cannot send WhatsApp notification without phone number');
+                    // Continue with the approval/rejection but log the issue
+                }
+                
+                // Update the status to rejected (2)
+                const updateQuery = `
+                    UPDATE oc_seller_reels
+                    SET status = 2, date_modified = CURRENT_TIMESTAMP 
+                    WHERE reel_id = ?
+                `;
+                
+                db.query(updateQuery, [id], async (err, result) => {
+                    if (err) {
+                        console.error('Error rejecting seller reel:', err);
+                        return res.status(500).json({
+                            success: false,
+                            message: 'Failed to reject reel',
+                            error: err.message
+                        });
+                    }
+                    
+                    if (result.affectedRows === 0) {
+                        return res.status(404).json({
+                            success: false,
+                            message: 'Reel not found'
+                        });
+                    }
+                    
+                console.log('✅✅✅ Reel rejected successfully. Starting WhatsApp notification process...');
+                console.log('📊 Reel data being sent to notification service:');
+                console.log(JSON.stringify(reelData, null, 2));
+                console.log('📞 Phone number in reelData.telephone:', reelData.telephone);
+                console.log('📞 Phone number type:', typeof reelData.telephone);
+                console.log('📞 Phone number length:', reelData.telephone ? reelData.telephone.length : 'null/undefined');
+                
+                // Send WhatsApp notification
+                try {
+                    console.log('🔔 Loading notification service module...');
+                    const { sendSellerReelRejectionNotification } = require('../../Services/Notifications/notificationService');
+                    console.log('🔔 Notification function loaded. Calling sendSellerReelRejectionNotification...');
+                    
+                    const notificationResult = await sendSellerReelRejectionNotification(reelData);
+                    
+                    console.log('✅✅✅ WhatsApp reel rejection notification COMPLETED');
+                    console.log('📬 Notification result:', JSON.stringify(notificationResult, null, 2));
+                    
+                    if (!notificationResult || !notificationResult.success) {
+                        console.error('⚠️⚠️⚠️ Notification returned unsuccessful or no result');
+                        console.error('Result object:', notificationResult);
+                        console.error('Error message:', notificationResult?.message || notificationResult?.error || 'Unknown error');
+                    } else {
+                        console.log('✅✅✅ Notification sent successfully!');
+                    }
+                } catch (notifError) {
+                    console.error('❌❌❌ EXCEPTION occurred while sending WhatsApp notification for reel rejection');
+                    console.error('❌ Error type:', notifError?.constructor?.name || 'Unknown');
+                    console.error('❌ Error message:', notifError?.message || 'No message');
+                    console.error('❌ Error stack:', notifError?.stack || 'No stack trace');
+                    if (notifError?.response) {
+                        console.error('❌ HTTP Status:', notifError.response.status);
+                        console.error('❌ Response Data:', JSON.stringify(notifError.response.data, null, 2));
+                    }
+                    if (notifError?.request) {
+                        console.error('❌ Request was made but no response received');
+                    }
+                    // Don't fail the request if notification fails
+                }
+                
+                console.log('✅✅✅ Notification process finished (regardless of success/failure)');
+                    
+                    res.json({
+                        success: true,
+                        message: 'Reel rejected successfully'
+                    });
+                });
             });
         });
     } catch (error) {
@@ -4630,74 +5559,102 @@ const rejectSellerReel = async (req, res) => {
 // Added by Vaishnavi
 const getInfluencerReelsAdmin = async (req, res) => {
     try {
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        
-        // Query that gets recent influencer reels with product information and platform details
-        // Modified to ensure we get all approved influencer reels regardless of influencer status
+        // Exact same pattern as seller reels - simple JOIN, no complex queries
         const query = `
             SELECT 
                 ir.reel_id as id,
+                ir.influencer_id,
                 ir.title,
                 ir.description,
                 ir.video_url,
                 ir.thumbnail,
-                orc.name as category_name,
                 CASE 
                     WHEN ir.status = 1 THEN 'approved'
                     WHEN ir.status = 0 THEN 'pending'
                     WHEN ir.status = 2 THEN 'rejected'
                     ELSE 'unknown'
                 END as status,
-                0 as views,
-                0 as likes,
+                COALESCE(ir.views, 0) as views,
+                COALESCE(ir.likes, 0) as likes,
+                COALESCE(ir.comments, 0) as comments,
                 ir.date_added as created_at,
-                GROUP_CONCAT(irp.product_id) as product_ids,
-                ir.influencer_id as influencer_id,
+                CONCAT(oi.firstname, ' ', oi.lastname) as influencer_name,
                 oi.firstname as influencer_firstname,
                 oi.lastname as influencer_lastname,
-                oi.platform as platform,
-                oi.account_link as account_link
-            FROM influencer_reels ir
-            LEFT JOIN influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
-            LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
-            LEFT JOIN influencer_reel_product irp ON ir.reel_id = irp.reel_id
-            LEFT JOIN oc_influencers oi ON ir.influencer_id = oi.id
-            WHERE ir.status = 1
-            GROUP BY ir.reel_id
+                oi.email as influencer_email,
+                oi.platform,
+                oi.account_link
+            FROM oc_influencer_reels ir
+            JOIN oc_influencers oi ON ir.influencer_id = oi.id
             ORDER BY ir.date_added DESC
         `;
         
         db.query(query, (err, results) => {
             if (err) {
-                console.error('Error fetching influencer reels:', err)
+                console.error('Error fetching influencer reels:', err);
+                console.error('SQL Query:', query);
+                console.error('Error details:', {
+                    code: err.code,
+                    sqlMessage: err.sqlMessage,
+                    sqlState: err.sqlState,
+                    errno: err.errno
+                });
                 return res.status(500).json({ 
                     success: false, 
                     message: 'Error fetching influencer reels',
-                    error: err.message 
-                })
+                    error: err.message,
+                    sqlError: err.sqlMessage || err.message,
+                    errorCode: err.code
+                });
             }
             
-            // Process results to format product_ids as array
+            // Process results - add empty arrays for product_ids and category_name
+            // These can be fetched separately if needed, but for now keep it simple
+            const baseUrl = `${req.protocol}://${req.get('host')}`;
             const processedResults = results.map(reel => {
+                // Append SAS token to video URL
+                let videoUrlWithSAS = null;
+                if (reel.video_url) {
+                    const fullVideoUrl = reel.video_url.startsWith('http') ? reel.video_url : `${baseUrl}${reel.video_url}`;
+                    videoUrlWithSAS = appendSAS(fullVideoUrl);
+                    
+                    // Log for debugging
+                    const hasSasToken = videoUrlWithSAS.includes('?') || videoUrlWithSAS.includes('&');
+                    if (!hasSasToken) {
+                        console.warn(`[getInfluencerReelsAdmin] WARNING: Video URL missing SAS token for reel ${reel.id}`);
+                    }
+                }
+                
+                // Append SAS token to thumbnail URL if it's an Azure URL
+                let thumbnailUrl = reel.thumbnail;
+                if (thumbnailUrl && thumbnailUrl.startsWith('http') && thumbnailUrl.includes('blob.core.windows.net')) {
+                    thumbnailUrl = appendSAS(thumbnailUrl);
+                }
+                
                 return {
                     ...reel,
-                    product_ids: reel.product_ids ? reel.product_ids.split(',').map(id => parseInt(id)) : [],
-                    influencer_name: `${reel.influencer_firstname || ''} ${reel.influencer_lastname || ''}`.trim() || 'Unknown'
+                    video_url: videoUrlWithSAS,
+                    thumbnail: thumbnailUrl,
+                    product_ids: [], // Will be empty for now - can add later if needed
+                    category_name: '', // Will be empty for now - can add later if needed
+                    views: Number(reel.views || 0),
+                    likes: Number(reel.likes || 0),
+                    comments: Number(reel.comments || 0)
                 };
             });
             
             return res.status(200).json({
                 success: true,
                 data: processedResults
-            })
-        })
+            });
+        });
     } catch (error) {
-        console.error('Get influencer reels error:', error)
+        console.error('Get influencer reels error:', error);
         return res.status(500).json({ 
             success: false, 
             message: 'Failed to fetch influencer reels',
             error: error.message 
-        })
+        });
     }
 };
 // Get reels for a specific influencer by ID
@@ -4734,10 +5691,10 @@ const getInfluencerReelsById = async (req, res) => {
                 0 as likes,
                 ir.date_added as created_at,
                 GROUP_CONCAT(irp.product_id) as product_ids
-            FROM influencer_reels ir
-            LEFT JOIN influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
+            FROM oc_influencer_reels ir
+            LEFT JOIN oc_influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
             LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
-            LEFT JOIN influencer_reel_product irp ON ir.reel_id = irp.reel_id
+            LEFT JOIN oc_influencer_reel_product irp ON ir.reel_id = irp.reel_id
             WHERE ir.influencer_id = ?
             GROUP BY ir.reel_id
             ORDER BY ir.date_added DESC
@@ -4753,17 +5710,105 @@ const getInfluencerReelsById = async (req, res) => {
                 });
             }
             
-            // Process results
+            // Process results and append SAS tokens to video URLs
             const processedResults = results.map(reel => {
+                // Append SAS token to video URL (only for Azure URLs)
+                let videoUrlWithSAS = null;
+                if (reel.video_url) {
+                    const fullVideoUrl = reel.video_url.startsWith('http') ? reel.video_url : `${baseUrl}${reel.video_url}`;
+                    videoUrlWithSAS = appendSAS(fullVideoUrl);
+                    
+                    // Log for debugging (only for Azure URLs)
+                    if (isAzureBlobUrl(videoUrlWithSAS)) {
+                        const hasSasToken = videoUrlWithSAS.includes('?') || videoUrlWithSAS.includes('&');
+                        const { token: sasToken, source: sasSource } = resolveSasToken();
+                        console.log(`[getInfluencerReelsById] Azure video URL for reel ${reel.id}:`, {
+                            original: reel.video_url?.substring(0, 100),
+                            withSAS: videoUrlWithSAS.substring(0, 100),
+                            hasSasToken: hasSasToken,
+                            sasConfigured: Boolean(sasToken),
+                            sasSource: sasSource || 'none'
+                        });
+                        if (!hasSasToken) {
+                            console.warn(`[getInfluencerReelsById] WARNING: Azure video URL missing SAS token for reel ${reel.id}`);
+                            if (!sasToken) {
+                                console.warn('[getInfluencerReelsById] SAS token not configured in environment.');
+                            }
+                        }
+                    }
+                }
+                
+                // Append SAS token to thumbnail URL if it's an Azure URL
+                let thumbnailUrl = reel.thumbnail;
+                if (thumbnailUrl && thumbnailUrl.startsWith('http') && thumbnailUrl.includes('blob.core.windows.net')) {
+                    thumbnailUrl = appendSAS(thumbnailUrl);
+                }
+                
                 return {
                     ...reel,
-                    product_ids: reel.product_ids ? reel.product_ids.split(',').map(id => parseInt(id)) : [],
+                    video_url: videoUrlWithSAS,
+                    thumbnail: thumbnailUrl,
+                    product_ids: reel.product_ids ? reel.product_ids.split(',').map(id => parseInt(id)).filter(id => !isNaN(id)) : [],
+                    product_names: [],
+                    brand_names: []
                 };
             });
+
+            const allProductIds = Array.from(new Set(processedResults.flatMap(r => r.product_ids)));
+            if (allProductIds.length === 0) {
+                return res.status(200).json({ success: true, data: processedResults });
+            }
             
-            return res.status(200).json({
-                success: true,
-                data: processedResults
+            const namesQuery = `
+                SELECT p.product_id as id, pd.name, p.manufacturer_id as brand_id
+                FROM oc_product p
+                JOIN oc_product_description pd ON p.product_id = pd.product_id AND pd.language_id = 1
+                WHERE p.product_id IN (${allProductIds.map(() => '?').join(',')})
+            `;
+            dbSagar.query(namesQuery, allProductIds, (nErr, rows) => {
+                if (nErr) {
+                    console.error('Error fetching influencer product names:', nErr);
+                    return res.status(200).json({ success: true, data: processedResults });
+                }
+                const productNameMap = {};
+                const brandIdSet = new Set();
+                rows.forEach(r => { productNameMap[r.id] = r.name; if (r.brand_id) brandIdSet.add(r.brand_id); });
+                const brandIds = Array.from(brandIdSet);
+                if (brandIds.length === 0) {
+                    const withNames = processedResults.map(reel => ({
+                        ...reel,
+                        product_names: reel.product_ids.map(pid => productNameMap[pid]).filter(Boolean)
+                    }));
+                    return res.status(200).json({ success: true, data: withNames });
+                }
+                const brandQuery = `SELECT manufacturer_id as id, name FROM oc_manufacturer WHERE manufacturer_id IN (${brandIds.map(() => '?').join(',')})`;
+                dbSagar.query(brandQuery, brandIds, (bErr, bRows) => {
+                    if (bErr) {
+                        console.error('Error fetching influencer brand names:', bErr);
+                        const withNames = processedResults.map(reel => ({
+                            ...reel,
+                            product_names: reel.product_ids.map(pid => productNameMap[pid]).filter(Boolean)
+                        }));
+                        return res.status(200).json({ success: true, data: withNames });
+                    }
+                    const brandNameMap = {};
+                    bRows.forEach(b => { brandNameMap[b.id] = b.name; });
+                    const withNamesBrands = processedResults.map(reel => {
+                        const brandNamesFromProducts = reel.product_ids
+                            .map(pid => {
+                                const row = rows.find(r => r.id === pid);
+                                return row && brandNameMap[row.brand_id];
+                            })
+                            .filter(Boolean);
+                        const uniqueBrandNames = Array.from(new Set(brandNamesFromProducts));
+                        return {
+                            ...reel,
+                            product_names: reel.product_ids.map(pid => productNameMap[pid]).filter(Boolean),
+                            brand_names: uniqueBrandNames
+                        };
+                    });
+                    return res.status(200).json({ success: true, data: withNamesBrands });
+                });
             });
         });
     } catch (error) {
@@ -4789,33 +5834,99 @@ const approveInfluencerReel = async (req, res) => {
             });
         }
         
-        // Build query to update influencer reel status to approved (1)
-<<<<<<< HEAD
-        const query = `UPDATE oc_influencer_reels SET status = 1 WHERE reel_id = ?`;
-=======
-        const query = `UPDATE influencer_reels SET status = 1 WHERE reel_id = ?`;
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
+        console.log('=== APPROVE INFLUENCER REEL ENDPOINT CALLED ===');
+        console.log('Reel ID:', id);
         
-        db.query(query, [id], (err, results) => {
-            if (err) {
-                console.error('Error approving influencer reel:', err);
+        // First, fetch reel and influencer data before updating
+        const fetchQuery = `
+            SELECT 
+                ir.reel_id,
+                ir.title,
+                ir.influencer_id,
+                oi.firstname,
+                oi.lastname,
+                oi.email,
+                oi.telephone
+            FROM oc_influencer_reels ir
+            JOIN oc_influencers oi ON ir.influencer_id = oi.id
+            WHERE ir.reel_id = ?
+        `;
+        
+        db.query(fetchQuery, [id], async (fetchErr, fetchResults) => {
+            if (fetchErr) {
+                console.error('Error fetching influencer reel data:', fetchErr);
                 return res.status(500).json({ 
                     success: false, 
-                    message: 'Error approving influencer reel',
-                    error: err.message 
+                    message: 'Error fetching reel information',
+                    error: fetchErr.message 
                 });
             }
             
-            if (results.affectedRows === 0) {
+            if (fetchResults.length === 0) {
                 return res.status(404).json({
                     success: false,
                     message: 'Reel not found'
                 });
             }
             
-            return res.status(200).json({
-                success: true,
-                message: 'Reel approved successfully'
+            const reelData = fetchResults[0];
+            console.log('Fetched reel data for notification:', {
+                reel_id: reelData.reel_id,
+                title: reelData.title,
+                influencer_id: reelData.influencer_id,
+                name: `${reelData.firstname} ${reelData.lastname}`,
+                phone: reelData.telephone,
+                email: reelData.email
+            });
+            
+            // Build query to update influencer reel status to approved (1)
+            const updateQuery = `UPDATE oc_influencer_reels SET status = 1 WHERE reel_id = ?`;
+            
+            db.query(updateQuery, [id], async (err, results) => {
+                if (err) {
+                    console.error('Error approving influencer reel:', err);
+                    return res.status(500).json({ 
+                        success: false, 
+                        message: 'Error approving influencer reel',
+                        error: err.message 
+                    });
+                }
+                
+                if (results.affectedRows === 0) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Reel not found'
+                    });
+                }
+                
+                console.log('Reel approved successfully. Sending WhatsApp notification...');
+                console.log('Reel data being sent to notification:', JSON.stringify(reelData, null, 2));
+                
+                // Send WhatsApp notification
+                try {
+                    const { sendInfluencerReelApprovalNotification } = require('../../Services/Notifications/notificationService');
+                    const notificationResult = await sendInfluencerReelApprovalNotification(reelData);
+                    console.log('✅ WhatsApp reel approval notification result:', JSON.stringify(notificationResult, null, 2));
+                    
+                    if (!notificationResult.success) {
+                        console.error('⚠️ Notification returned unsuccessful:', notificationResult.message || notificationResult.error);
+                    }
+                } catch (notifError) {
+                    console.error('❌ EXCEPTION sending WhatsApp notification for reel approval:');
+                    console.error('Error type:', notifError.constructor.name);
+                    console.error('Error message:', notifError.message);
+                    console.error('Error stack:', notifError.stack);
+                    if (notifError.response) {
+                        console.error('HTTP Status:', notifError.response.status);
+                        console.error('Response Data:', JSON.stringify(notifError.response.data));
+                    }
+                    // Don't fail the request if notification fails
+                }
+                
+                return res.status(200).json({
+                    success: true,
+                    message: 'Reel approved successfully'
+                });
             });
         });
     } catch (error) {
@@ -4842,33 +5953,99 @@ const rejectInfluencerReel = async (req, res) => {
             });
         }
         
-        // Build query to update influencer reel status to rejected (2)
-<<<<<<< HEAD
-        const query = `UPDATE oc_influencer_reels SET status = 2 WHERE reel_id = ?`;
-=======
-        const query = `UPDATE influencer_reels SET status = 2 WHERE reel_id = ?`;
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
+        console.log('=== REJECT INFLUENCER REEL ENDPOINT CALLED ===');
+        console.log('Reel ID:', id);
         
-        db.query(query, [id], (err, results) => {
-            if (err) {
-                console.error('Error rejecting influencer reel:', err);
+        // First, fetch reel and influencer data before updating
+        const fetchQuery = `
+            SELECT 
+                ir.reel_id,
+                ir.title,
+                ir.influencer_id,
+                oi.firstname,
+                oi.lastname,
+                oi.email,
+                oi.telephone
+            FROM oc_influencer_reels ir
+            JOIN oc_influencers oi ON ir.influencer_id = oi.id
+            WHERE ir.reel_id = ?
+        `;
+        
+        db.query(fetchQuery, [id], async (fetchErr, fetchResults) => {
+            if (fetchErr) {
+                console.error('Error fetching influencer reel data:', fetchErr);
                 return res.status(500).json({ 
                     success: false, 
-                    message: 'Error rejecting influencer reel',
-                    error: err.message 
+                    message: 'Error fetching reel information',
+                    error: fetchErr.message 
                 });
             }
             
-            if (results.affectedRows === 0) {
+            if (fetchResults.length === 0) {
                 return res.status(404).json({
                     success: false,
                     message: 'Reel not found'
                 });
             }
             
-            return res.status(200).json({
-                success: true,
-                message: 'Reel rejected successfully'
+            const reelData = fetchResults[0];
+            console.log('Fetched reel data for notification:', {
+                reel_id: reelData.reel_id,
+                title: reelData.title,
+                influencer_id: reelData.influencer_id,
+                name: `${reelData.firstname} ${reelData.lastname}`,
+                phone: reelData.telephone,
+                email: reelData.email
+            });
+            
+            // Build query to update influencer reel status to rejected (2)
+            const updateQuery = `UPDATE oc_influencer_reels SET status = 2 WHERE reel_id = ?`;
+            
+            db.query(updateQuery, [id], async (err, results) => {
+                if (err) {
+                    console.error('Error rejecting influencer reel:', err);
+                    return res.status(500).json({ 
+                        success: false, 
+                        message: 'Error rejecting influencer reel',
+                        error: err.message 
+                    });
+                }
+                
+                if (results.affectedRows === 0) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Reel not found'
+                    });
+                }
+                
+                console.log('Reel rejected successfully. Sending WhatsApp notification...');
+                console.log('Reel data being sent to notification:', JSON.stringify(reelData, null, 2));
+                
+                // Send WhatsApp notification
+                try {
+                    const { sendInfluencerReelRejectionNotification } = require('../../Services/Notifications/notificationService');
+                    const notificationResult = await sendInfluencerReelRejectionNotification(reelData);
+                    console.log('✅ WhatsApp reel rejection notification result:', JSON.stringify(notificationResult, null, 2));
+                    
+                    if (!notificationResult.success) {
+                        console.error('⚠️ Notification returned unsuccessful:', notificationResult.message || notificationResult.error);
+                    }
+                } catch (notifError) {
+                    console.error('❌ EXCEPTION sending WhatsApp notification for reel rejection:');
+                    console.error('Error type:', notifError.constructor.name);
+                    console.error('Error message:', notifError.message);
+                    console.error('Error stack:', notifError.stack);
+                    if (notifError.response) {
+                        console.error('HTTP Status:', notifError.response.status);
+                        console.error('Response Data:', JSON.stringify(notifError.response.data));
+                    }
+                    // Don't fail the request if notification fails
+                }
+                
+                return res.status(200).json({
+                    success: true,
+                    message: 'Reel rejected successfully'
+                });
             });
         });
     } catch (error) {
@@ -4895,7 +6072,7 @@ const getAllPendingSellerReels = async (req, res) => {
                 sr.date_added,
                 CONCAT(os.firstname, ' ', os.lastname) as seller_name,
                 os.email as seller_email
-            FROM seller_reels sr
+            FROM oc_seller_reels sr
             JOIN oc_sellers os ON sr.seller_id = os.id
             WHERE sr.status = 0
             ORDER BY sr.date_added DESC
@@ -4929,11 +6106,7 @@ const getAllPendingSellerReels = async (req, res) => {
 const getAllApprovedSellerReels = async (req, res) => {
     try {
         // We need to join tables from two different databases
-<<<<<<< HEAD
         // oc_seller_reels is in the main db (ipshopy_reels)
-=======
-        // seller_reels is in the main db (ipshopy_reels)
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
         // oc_sellers is in dbSagar (sagar database)
         const query = `
             SELECT 
@@ -4946,7 +6119,7 @@ const getAllApprovedSellerReels = async (req, res) => {
                 sr.date_added,
                 CONCAT(s.firstname, ' ', s.lastname) as seller_name,
                 s.email as seller_email
-            FROM seller_reels sr
+            FROM oc_seller_reels sr
             JOIN oc_sellers s ON sr.seller_id = s.vendor_id
             WHERE sr.status = 1
             ORDER BY sr.date_added DESC
@@ -4977,6 +6150,385 @@ const getAllApprovedSellerReels = async (req, res) => {
         });
     }
 };
+
+// Get all approved influencer reels for admin
+const getAllApprovedInfluencerReels = async (req, res) => {
+    try {
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const query = `
+            SELECT 
+                ir.reel_id,
+                ir.influencer_id,
+                ir.title,
+                ir.description,
+                ir.video_url,
+                ir.thumbnail,
+                ir.date_added,
+                0 as views,
+                0 as likes,
+                0 as comments,
+                CONCAT(oi.firstname, ' ', oi.lastname) as influencer_name,
+                oi.email as influencer_email,
+                oi.platform,
+                oi.account_link
+            FROM oc_influencer_reels ir
+            JOIN oc_influencers oi ON ir.influencer_id = oi.id
+            WHERE ir.status = 1
+            ORDER BY ir.date_added DESC
+        `;
+        
+        db.query(query, (err, results) => {
+            if (err) {
+                console.error('Error fetching approved influencer reels:', err);
+                return res.status(500).json({ 
+                    success: false, 
+                    message: 'Error fetching approved influencer reels',
+                    error: err.message 
+                });
+            }
+            
+            // Fetch product and brand names for each reel
+            if (results.length === 0) {
+                return res.status(200).json({
+                    success: true,
+                    data: []
+                });
+            }
+            
+            const reelIds = results.map(r => r.reel_id);
+            const placeholders = reelIds.map(() => '?').join(',');
+            
+            // First, get product IDs for each reel
+            const productIdsQuery = `
+                SELECT 
+                    irp.reel_id,
+                    GROUP_CONCAT(DISTINCT irp.product_id) as product_ids
+                FROM oc_influencer_reel_product irp
+                WHERE irp.reel_id IN (${placeholders})
+                GROUP BY irp.reel_id
+            `;
+            
+            db.query(productIdsQuery, reelIds, (productIdsErr, productIdsResults) => {
+                if (productIdsErr) {
+                    console.error('Error fetching product IDs:', productIdsErr);
+                    // Return results without product names if query fails
+                    const processedResults = results.map(reel => {
+                        // Construct full URLs for video and thumbnail
+                        let fullVideoUrl = null;
+                        let fullThumbnailUrl = null;
+                        
+                        if (reel.video_url) {
+                            fullVideoUrl = reel.video_url.startsWith('http') ? appendSAS(reel.video_url) : `${baseUrl}${reel.video_url}`;
+                        }
+                        if (reel.thumbnail) {
+                            fullThumbnailUrl = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
+                        }
+                        
+                        return {
+                            ...reel,
+                            product_names: [],
+                            brand_names: [],
+                            video_url: fullVideoUrl,
+                            thumbnail: fullThumbnailUrl,
+                            id: reel.reel_id,
+                            created_at: reel.date_added
+                        };
+                    });
+                    return res.status(200).json({
+                        success: true,
+                        data: processedResults
+                    });
+                }
+                
+                // Collect all unique product IDs
+                const allProductIds = new Set();
+                const reelProductMap = {}; // Map reel_id to array of product_ids
+                
+                if (productIdsResults && productIdsResults.length > 0) {
+                    productIdsResults.forEach(row => {
+                        if (row.product_ids) {
+                            const productIds = row.product_ids.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id) && id > 0);
+                            reelProductMap[row.reel_id] = productIds;
+                            productIds.forEach(id => allProductIds.add(id));
+                        } else {
+                            reelProductMap[row.reel_id] = [];
+                        }
+                    });
+                }
+                
+                // If no product IDs found, return results without product names
+                if (allProductIds.size === 0) {
+                    const processedResults = results.map(reel => {
+                        // Construct full URLs for video and thumbnail
+                        let fullVideoUrl = null;
+                        let fullThumbnailUrl = null;
+                        
+                        if (reel.video_url) {
+                            fullVideoUrl = reel.video_url.startsWith('http') ? appendSAS(reel.video_url) : `${baseUrl}${reel.video_url}`;
+                        }
+                        if (reel.thumbnail) {
+                            fullThumbnailUrl = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
+                }
+                
+                        return {
+                            ...reel,
+                            product_names: [],
+                            brand_names: [],
+                            video_url: fullVideoUrl,
+                            thumbnail: fullThumbnailUrl,
+                            id: reel.reel_id,
+                            created_at: reel.date_added
+                        };
+                    });
+                    return res.status(200).json({
+                        success: true,
+                        data: processedResults
+                    });
+                }
+                
+                // Fetch product names from oc_product table (sagar database)
+                const productNamesQuery = `
+                    SELECT 
+                        p.product_id as id, 
+                        pd.name,
+                        p.manufacturer_id as brand_id
+                    FROM oc_product p
+                    JOIN oc_product_description pd ON p.product_id = pd.product_id AND pd.language_id = 1
+                    WHERE p.product_id IN (${Array.from(allProductIds).map(() => '?').join(',')})
+                `;
+                
+                dbSagar.query(productNamesQuery, Array.from(allProductIds), (productNamesErr, productNamesResults) => {
+                    if (productNamesErr) {
+                        console.error('Error fetching product names from oc_product:', productNamesErr);
+                        // Return results without product names if query fails
+                        const processedResults = results.map(reel => {
+                            // Construct full URLs for video and thumbnail
+                            let fullVideoUrl = null;
+                            let fullThumbnailUrl = null;
+                            
+                            if (reel.video_url) {
+                                fullVideoUrl = reel.video_url.startsWith('http') ? appendSAS(reel.video_url) : `${baseUrl}${reel.video_url}`;
+                            }
+                            if (reel.thumbnail) {
+                                fullThumbnailUrl = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
+                            }
+                            
+                            return {
+                                ...reel,
+                                product_names: [],
+                                brand_names: [],
+                                video_url: fullVideoUrl,
+                                thumbnail: fullThumbnailUrl,
+                                id: reel.reel_id,
+                                created_at: reel.date_added
+                            };
+                        });
+                        return res.status(200).json({
+                            success: true,
+                            data: processedResults
+                        });
+                    }
+                    
+                    // Create maps for product names and brand IDs
+                    const productNameMap = {};
+                    const brandIdsSet = new Set();
+                    
+                    if (productNamesResults && productNamesResults.length > 0) {
+                        productNamesResults.forEach(row => {
+                            productNameMap[row.id] = row.name;
+                            if (row.brand_id) {
+                                brandIdsSet.add(row.brand_id);
+                            }
+                        });
+                    }
+                    
+                    // Fetch brand names from oc_manufacturer if we have brand IDs
+                    if (brandIdsSet.size > 0) {
+                        const brandNamesQuery = `
+                            SELECT 
+                                manufacturer_id as id,
+                                name
+                            FROM oc_manufacturer
+                            WHERE manufacturer_id IN (${Array.from(brandIdsSet).map(() => '?').join(',')})
+                        `;
+                        
+                        dbSagar.query(brandNamesQuery, Array.from(brandIdsSet), (brandNamesErr, brandNamesResults) => {
+                            if (brandNamesErr) {
+                                console.error('Error fetching brand names:', brandNamesErr);
+                            }
+                            
+                            // Create brand name map
+                            const brandNameMap = {};
+                            if (brandNamesResults && brandNamesResults.length > 0) {
+                                brandNamesResults.forEach(row => {
+                                    brandNameMap[row.id] = row.name;
+                                });
+                            }
+                            
+                            // Map products to brands for each reel
+                            const reelBrandMap = {}; // Map reel_id to array of brand names
+                            
+                            // Process each reel to get product names and brand names
+                            const processedResults = results.map(reel => {
+                                const productIds = reelProductMap[reel.reel_id] || [];
+                                const productNames = productIds
+                                    .map(pid => productNameMap[pid])
+                                    .filter(Boolean);
+                                
+                                // Get unique brand names for products in this reel
+                                const brandIds = productIds
+                                    .map(pid => {
+                                        const product = productNamesResults.find(p => p.id === pid);
+                                        return product ? product.brand_id : null;
+                                    })
+                                    .filter(Boolean);
+                                
+                                const brandNames = Array.from(new Set(
+                                    brandIds
+                                        .map(bid => brandNameMap[bid])
+                                        .filter(Boolean)
+                                ));
+                                
+                                // Construct full URLs for video and thumbnail
+                                let fullVideoUrl = null;
+                                let fullThumbnailUrl = null;
+                                
+                                if (reel.video_url) {
+                                    fullVideoUrl = reel.video_url.startsWith('http') ? appendSAS(reel.video_url) : `${baseUrl}${reel.video_url}`;
+                                }
+                                if (reel.thumbnail) {
+                                    fullThumbnailUrl = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
+                                }
+                                
+                                return {
+                        ...reel,
+                                    product_names: productNames,
+                                    brand_names: brandNames,
+                                    video_url: fullVideoUrl,
+                                    thumbnail: fullThumbnailUrl,
+                        id: reel.reel_id,
+                        created_at: reel.date_added
+                                };
+                            });
+                    
+                    return res.status(200).json({
+                        success: true,
+                        data: processedResults
+                    });
+                });
+                    } else {
+                        // No brand IDs, just return product names
+                        const processedResults = results.map(reel => {
+                            const productIds = reelProductMap[reel.reel_id] || [];
+                            const productNames = productIds
+                                .map(pid => productNameMap[pid])
+                                .filter(Boolean);
+                            
+                            // Construct full URLs for video and thumbnail
+                            let fullVideoUrl = null;
+                            let fullThumbnailUrl = null;
+                            
+                            if (reel.video_url) {
+                                fullVideoUrl = reel.video_url.startsWith('http') ? appendSAS(reel.video_url) : `${baseUrl}${reel.video_url}`;
+                            }
+                            if (reel.thumbnail) {
+                                fullThumbnailUrl = reel.thumbnail.startsWith('http') ? reel.thumbnail : `${baseUrl}${reel.thumbnail}`;
+                            }
+                            
+                            return {
+                                ...reel,
+                                product_names: productNames,
+                                brand_names: [],
+                                video_url: fullVideoUrl,
+                                thumbnail: fullThumbnailUrl,
+                                id: reel.reel_id,
+                                created_at: reel.date_added
+                            };
+                        });
+                        
+                        return res.status(200).json({
+                            success: true,
+                            data: processedResults
+                        });
+                    }
+                });
+            });
+        });
+    } catch (error) {
+        console.error('Get all approved influencer reels error:', error);
+        return res.status(500).json({ 
+            success: false, 
+            message: 'Failed to fetch approved influencer reels',
+            error: error.message 
+        });
+    }
+};
+
+// Get approved influencers with reel counts (for admin list page)
+const getApprovedInfluencersWithReelCounts = async (req, res) => {
+    try {
+        // Use subqueries to get both approved reel counts and total reel counts
+        const query = `
+            SELECT 
+                oi.id as influencer_id,
+                CONCAT(oi.firstname, ' ', oi.lastname) as influencer_name,
+                oi.firstname,
+                oi.lastname,
+                oi.email,
+                oi.platform,
+                oi.account_link,
+                oi.status,
+                COALESCE(approved_counts.reel_count, 0) as approved_reel_count,
+                COALESCE(total_counts.reel_count, 0) as total_reel_count,
+                0 as total_views,
+                0 as total_likes,
+                0 as total_comments
+            FROM oc_influencers oi
+            LEFT JOIN (
+                SELECT 
+                    influencer_id,
+                    COUNT(*) as reel_count
+                FROM oc_influencer_reels
+                GROUP BY influencer_id
+            ) as total_counts ON oi.id = total_counts.influencer_id
+            LEFT JOIN (
+                SELECT 
+                    influencer_id,
+                    COUNT(*) as reel_count
+                FROM oc_influencer_reels
+                WHERE status = 1
+                GROUP BY influencer_id
+            ) as approved_counts ON oi.id = approved_counts.influencer_id
+            WHERE oi.status = 1
+            ORDER BY approved_reel_count DESC, oi.firstname ASC
+        `;
+        
+        db.query(query, (err, results) => {
+            if (err) {
+                console.error('Error fetching approved influencers with reel counts:', err);
+                console.error('SQL Query:', query);
+                return res.status(500).json({ 
+                    success: false, 
+                    message: 'Error fetching approved influencers with reel counts',
+                    error: err.message 
+                });
+            }
+            
+            return res.status(200).json({
+                success: true,
+                data: results
+            });
+        });
+    } catch (error) {
+        console.error('Get approved influencers with reel counts error:', error);
+        return res.status(500).json({ 
+            success: false, 
+            message: 'Failed to fetch approved influencers with reel counts',
+            error: error.message 
+        });
+    }
+};
+
 // Upload a new brand reel
 const uploadBrandReel = async (req, res) => {
     try {
@@ -5000,25 +6552,52 @@ const uploadBrandReel = async (req, res) => {
             }
         }
 
+        // Log what we received
+        console.log('Request body type:', typeof req.body);
+        console.log('Request body:', req.body);
+        console.log('Request body keys:', req.body ? Object.keys(req.body) : 'No body');
+        console.log('Request files:', req.files);
+        console.log('Request files keys:', req.files ? Object.keys(req.files) : 'No files');
+        
         // Check if any form data was received at all
         if (!req.body || Object.keys(req.body).length === 0) {
             console.log('ERROR: No form data received in request body');
-            console.log('Request object keys:', Object.keys(req));
-            if (req.body) {
-                console.log('Request body keys:', Object.keys(req.body));
-            }
+            console.log('Request content-type:', req.headers['content-type']);
             return res.status(400).json({
                 success: false,
-                message: 'No form data received'
+                message: 'No form data received. Please ensure all required fields are filled.'
             });
         }
 
         // Extract text fields from req.body (handling both naming conventions)
         const title = req.body.title;
-        const description = req.body.description;
+        const description = req.body.description || '';
         const category = req.body.category || req.body.category_id;
         const brandId = req.body.brandId || req.body.brand_id;
         const productId = req.body.productId || req.body.product_id;
+        const otherCategoryName = req.body.otherCategoryName || req.body.new_category_name || '';
+        
+        // Extract multiple product IDs (may be sent as JSON string, array, or indexed array)
+        let selectedProducts = [];
+        if (req.body.productIds) {
+            try {
+                const parsed = typeof req.body.productIds === 'string' ? JSON.parse(req.body.productIds) : req.body.productIds;
+                selectedProducts = Array.isArray(parsed) ? parsed : [parsed];
+            } catch (e) {
+                // If parsing fails, try as comma-separated string
+                selectedProducts = String(req.body.productIds).split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+            }
+        } else if (req.body.product_ids) {
+            // Handle array format product_ids[0], product_ids[1], etc.
+            if (Array.isArray(req.body.product_ids)) {
+                selectedProducts = req.body.product_ids.map(id => parseInt(id)).filter(id => !isNaN(id));
+            } else {
+                selectedProducts = [parseInt(req.body.product_ids)].filter(id => !isNaN(id));
+            }
+        } else if (productId) {
+            // Fallback to single product_id
+            selectedProducts = [parseInt(productId)].filter(id => !isNaN(id));
+        }
 
         // Log parsed data
         console.log('Parsed data:', {
@@ -5035,7 +6614,7 @@ const uploadBrandReel = async (req, res) => {
         // Validation with detailed logging
         console.log('Starting validation checks...');
 
-        if (!title) {
+        if (!title || (typeof title === 'string' && title.trim() === '')) {
             console.log('Title validation failed - title is:', title);
             return res.status(400).json({
                 success: false,
@@ -5043,7 +6622,8 @@ const uploadBrandReel = async (req, res) => {
             });
         }
 
-        if (!category) {
+        // Allow 'other' as a valid category value
+        if (!category || (category !== 'other' && (category === '' || category === 'undefined'))) {
             console.log('Category validation failed - category is:', category);
             return res.status(400).json({
                 success: false,
@@ -5051,7 +6631,7 @@ const uploadBrandReel = async (req, res) => {
             });
         }
 
-        if (!brandId) {
+        if (!brandId || brandId === '' || brandId === 'undefined') {
             console.log('Brand validation failed - brandId is:', brandId);
             return res.status(400).json({
                 success: false,
@@ -5059,13 +6639,33 @@ const uploadBrandReel = async (req, res) => {
             });
         }
 
-        // Check if video file is provided
-        if (!req.files || !req.files.video) {
-            console.log('Video file validation failed - files:', req.files);
-
+        // Check if video file is provided (multer stores as array with upload.fields())
+        const hasVideoFile = req.files && 
+                            req.files.video && 
+                            Array.isArray(req.files.video) && 
+                            req.files.video.length > 0 && 
+                            req.files.video[0];
+        
+        if (!hasVideoFile) {
+            console.log('Video file validation failed:', {
+                hasFiles: !!req.files,
+                hasVideo: !!(req.files && req.files.video),
+                videoType: req.files && req.files.video ? typeof req.files.video : 'N/A',
+                isArray: req.files && req.files.video ? Array.isArray(req.files.video) : false,
+                length: req.files && req.files.video && Array.isArray(req.files.video) ? req.files.video.length : 0
+            });
             return res.status(400).json({
                 success: false,
                 message: 'Video file is required'
+            });
+        }
+        
+        // Enforce max 30s duration (client-provided metadata)
+        const videoDurationClientBrand = req.body.videoDuration ? parseFloat(String(req.body.videoDuration)) : NaN;
+        if (!Number.isNaN(videoDurationClientBrand) && videoDurationClientBrand > 30.0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Video must be 30 seconds or less'
             });
         }
 
@@ -5074,52 +6674,54 @@ const uploadBrandReel = async (req, res) => {
         const brandCheckQuery = 'SELECT manufacturer_id FROM oc_manufacturer WHERE manufacturer_id = ?';
         
         dbSagar.query(brandCheckQuery, [brandId], async (err, brandResults) => {
-            if (err) {
-                console.error('Database error checking brand:', err);
-                return res.status(500).json({
-                    success: false,
-                    message: 'Error validating brand',
-                    error: err.message
-                });
-            }
-            
-            if (brandResults.length === 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Invalid brand selected'
-                });
-            }
-            
-            // Handle file uploads
-            // Save actual file paths to database
-            const videoFile = req.files.video ? req.files.video[0] : null;
-            let videoUrl = null;
-            if (videoFile) {
-                try {
-<<<<<<< HEAD
-                    videoUrl = await uploadToAzure(
-                        videoFile.path,
-                        videoFile.originalname || videoFile.filename,
-                        videoFile.mimetype || 'application/octet-stream'
-                    );
-                } catch (e) {
-                    console.error('Azure upload failed:', e && e.message ? e.message : e);
+            try {
+                if (err) {
+                    console.error('Database error checking brand:', err);
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Error validating brand',
+                        error: err.message
+                    });
                 }
-                if (videoUrl) {
-                    videoUrl = appendSAS(videoUrl)
-                    try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
-                } else {
-                    try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
-                    return res.status(502).json({ success: false, message: 'Azure upload failed' });
+                
+                if (brandResults.length === 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Invalid brand selected'
+                    });
                 }
-=======
-                    videoUrl = await uploadToAzure(videoFile.path, videoFile.originalname || videoFile.filename);
-                } catch (e) {
-                    console.error('Azure upload failed:', e && e.message ? e.message : e)
+                
+                // Handle file uploads
+                // Save actual file paths to database
+                const videoFile = req.files.video ? req.files.video[0] : null;
+                let videoUrl = null;
+                if (videoFile) {
+                    try {
+                        videoUrl = await uploadToAzure(
+                            videoFile.path,
+                            videoFile.originalname || videoFile.filename,
+                            videoFile.mimetype || 'application/octet-stream'
+                        );
+                    } catch (e) {
+                        console.error('Azure upload failed:', e && e.message ? e.message : e);
+                        try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
+                        return res.status(502).json({ 
+                            success: false, 
+                            message: 'Azure upload failed',
+                            error: e && e.message ? e.message : 'Unknown error'
+                        });
+                    }
+                    if (videoUrl) {
+                        // IMPORTANT: Save video URL WITHOUT SAS token to database
+                        // SAS tokens expire, so we append them dynamically when retrieving
+                        videoUrl = stripSASToken(videoUrl);
+                        console.log('[uploadBrandReel] Saving video URL to database (without SAS token):', videoUrl.substring(0, 100));
+                        try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
+                    } else {
+                        try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
+                        return res.status(502).json({ success: false, message: 'Azure upload failed' });
+                    }
                 }
-                try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
-            }
 
             const thumbnailFile = req.files.thumbnail ? req.files.thumbnail[0] : null;
             const thumbnailUrl = thumbnailFile ? `/uploads/${thumbnailFile.filename}` : null;
@@ -5143,61 +6745,258 @@ const uploadBrandReel = async (req, res) => {
                 });
             }
 
-            // Insert the brand reel into the database
-            const brandReelQuery = `
-<<<<<<< HEAD
-                INSERT INTO oc_brand_reels
-=======
-                INSERT INTO brand_reels 
->>>>>>> 60100eeeef9413d40824717c48354bc12222d266
-                (brand_id, category_id, product_id, title, description, video_url, thumbnail_url, views, likes, comments, status, created_at) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'approved', NOW())
-            `;
+            // Validate videoUrl is not null before proceeding
+            if (!videoUrl) {
+                console.error('Video URL is null or empty after Azure upload');
+                return res.status(500).json({
+                    success: false,
+                    message: 'Video upload failed. Please try again.',
+                    error: 'Video URL is missing'
+                });
+            }
 
-            const brandReelValues = [
-                brandId,
-                category,
-                productId || null,
-                title,
-                description || null,
-                videoUrl,
-                thumbnailUrl
-            ];
+            // Handle category - if 'other', create new category first
+            const handleCategoryAndInsert = (finalCategoryId) => {
+                // Function to attempt insert (will retry after fixing constraint if needed)
+                const attemptInsert = () => {
+                    const brandReelQuery = `
+                        INSERT INTO oc_brand_reels
+                        (brand_id, category_id, product_id, title, description, video_url, thumbnail_url, views, likes, comments, status, created_at) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 1, NOW())
+                    `;
 
-            console.log('Inserting brand reel with values:', brandReelValues);
+                    const descriptionToSave = description || null;
 
-            db.query(brandReelQuery, brandReelValues, (err, result) => {
-                if (err) {
-                    console.error('Database error inserting brand reel:', err);
-                    console.error('SQL Query:', brandReelQuery);
-                    console.error('Values:', brandReelValues);
-                    // Check for foreign key constraint error
-                    if (err.code === 'ER_NO_REFERENCED_ROW_2') {
-                        return res.status(400).json({
+                    // Use first product ID for backward compatibility with product_id column
+                    const firstProductId = selectedProducts.length > 0 ? selectedProducts[0] : null;
+
+                    // Ensure all values are properly formatted
+                    const brandReelValues = [
+                        parseInt(brandId, 10),  // Ensure brandId is integer
+                        parseInt(finalCategoryId, 10),  // Ensure categoryId is integer
+                        firstProductId ? parseInt(firstProductId, 10) : null,  // First product ID for backward compatibility
+                        String(title || '').trim(),  // Ensure title is string
+                        descriptionToSave ? String(descriptionToSave).trim() : null,  // Ensure description is string or null
+                        String(videoUrl || ''),  // Ensure videoUrl is string
+                        thumbnailUrl ? String(thumbnailUrl) : null  // Ensure thumbnailUrl is string or null
+                    ];
+
+                    console.log('Inserting brand reel with values:', brandReelValues);
+                    console.log('Selected products:', selectedProducts);
+                    console.log('Value types:', brandReelValues.map(v => typeof v));
+
+                    db.query(brandReelQuery, brandReelValues, (err, result) => {
+                        if (err) {
+                            console.error('=== DATABASE ERROR INSERTING BRAND REEL ===');
+                        console.error('Error code:', err.code);
+                        console.error('Error SQL state:', err.sqlState);
+                        console.error('Error message:', err.message);
+                        console.error('Error SQL:', err.sql);
+                        console.error('SQL Query:', brandReelQuery);
+                        console.error('Values:', brandReelValues);
+                        console.error('Value types:', brandReelValues.map(v => typeof v));
+                        console.error('Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
+                        
+                        // Check for foreign key constraint error
+                        if (err.code === 'ER_NO_REFERENCED_ROW_2') {
+                            return res.status(400).json({
+                                success: false,
+                                message: 'Invalid brand or category ID. Please select valid options.',
+                                error: err.message
+                            });
+                        }
+                        
+                        // Check for table doesn't exist error
+                        if (err.code === 'ER_NO_SUCH_TABLE' || (err.message && err.message.includes("doesn't exist"))) {
+                            // Check if it's a foreign key constraint issue with 'brands' table
+                            if (err.message.includes('brands') && err.message.includes("doesn't exist")) {
+                                console.log('⚠️ Detected foreign key constraint issue with brands table. Attempting to fix...');
+                                
+                                // Try to find and drop the constraint automatically
+                                const findConstraintQuery = `
+                                    SELECT CONSTRAINT_NAME 
+                                    FROM information_schema.KEY_COLUMN_USAGE 
+                                    WHERE TABLE_SCHEMA = 'ipshopy_reels' 
+                                    AND TABLE_NAME = 'oc_brand_reels' 
+                                    AND REFERENCED_TABLE_NAME = 'brands'
+                                    LIMIT 1
+                                `;
+                                
+                                db.query(findConstraintQuery, (constraintErr, constraintResults) => {
+                                    if (constraintErr || !constraintResults || constraintResults.length === 0) {
+                                        console.error('Could not find constraint to drop:', constraintErr);
+                                        return res.status(500).json({
+                                            success: false,
+                                            message: `Foreign key constraint error: The 'oc_brand_reels' table has a foreign key constraint referencing a 'brands' table that doesn't exist. Please run: ALTER TABLE oc_brand_reels DROP FOREIGN KEY constraint_name; (Find constraint name with: SHOW CREATE TABLE oc_brand_reels;)`,
+                                            error: err.message,
+                                            errorCode: err.code
+                                        });
+                                    }
+                                    
+                                    const constraintName = constraintResults[0].CONSTRAINT_NAME;
+                                    console.log(`Found constraint: ${constraintName}, attempting to drop...`);
+                                    
+                                    const dropConstraintQuery = `ALTER TABLE \`oc_brand_reels\` DROP FOREIGN KEY \`${constraintName}\``;
+                                    db.query(dropConstraintQuery, (dropErr) => {
+                                        if (dropErr) {
+                                            console.error('Error dropping constraint:', dropErr);
+                                            return res.status(500).json({
+                                                success: false,
+                                                message: `Could not automatically fix foreign key constraint. Please run manually: ${dropConstraintQuery}`,
+                                                error: dropErr.message
+                                            });
+                                        }
+                                        
+                                        console.log('✅ Successfully dropped foreign key constraint. Retrying insert...');
+                                        // Retry the insert after dropping the constraint
+                                        attemptInsert();
+                                    });
+                                });
+                                return; // Exit early, will retry after dropping constraint
+                            }
+                            
+                            return res.status(500).json({
+                                success: false,
+                                message: `Database table error: ${err.message}. Please verify the table 'oc_brand_reels' exists in the 'ipshopy_reels' database.`,
+                                error: err.message,
+                                errorCode: err.code,
+                                sqlState: err.sqlState
+                            });
+                        }
+                        
+                        // Return detailed error for debugging
+                        return res.status(500).json({
                             success: false,
-                            message: 'Invalid brand or category ID. Please select valid options.',
-                            error: err.message
+                            message: 'Error saving brand reel to database',
+                            error: err.message,
+                            errorCode: err.code,
+                            sqlState: err.sqlState,
+                            sql: err.sql
+                        });
+                        }
+
+                        const reelId = result.insertId;
+                        console.log('✅ Brand reel inserted successfully, ID:', reelId);
+
+                        // Insert multiple products into junction table if products are selected
+                        if (selectedProducts && selectedProducts.length > 0) {
+                            // First, ensure the junction table exists
+                            const createJunctionTableQuery = `
+                                CREATE TABLE IF NOT EXISTS oc_brand_reel_product (
+                                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                                    reel_id BIGINT UNSIGNED NOT NULL,
+                                    product_id BIGINT UNSIGNED NOT NULL,
+                                    PRIMARY KEY (id),
+                                    KEY idx_reel_id (reel_id),
+                                    KEY idx_product_id (product_id),
+                                    UNIQUE KEY unique_reel_product (reel_id, product_id)
+                                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                            `;
+                            
+                            db.query(createJunctionTableQuery, (tableErr) => {
+                                if (tableErr) {
+                                    console.error('Error creating junction table:', tableErr);
+                                    // Continue anyway, try to insert
+                                }
+                                
+                                // Insert products into junction table
+                                const productQuery = `
+                                    INSERT INTO oc_brand_reel_product (reel_id, product_id) 
+                                    VALUES ?
+                                `;
+                                const productValues = selectedProducts.map(pid => [reelId, parseInt(pid)]);
+                                
+                                db.query(productQuery, [productValues], (productErr) => {
+                                    if (productErr) {
+                                        console.error('Error inserting products into junction table:', productErr);
+                                        // Still return success since main reel was inserted
+                                    }
+                                    console.log('✅ Products inserted into junction table');
+                                    
+                                    return res.status(201).json({
+                                        success: true,
+                                        message: 'Brand reel uploaded successfully',
+                                        data: { reelId, productCount: selectedProducts.length }
+                                    });
+                                });
+                            });
+                        } else {
+                        return res.status(201).json({
+                            success: true,
+                            message: 'Brand reel uploaded successfully',
+                            data: { reelId }
+                        });
+                        }
+                    });
+                };
+                
+                // First verify table exists
+                const checkTableQuery = `SHOW TABLES LIKE 'oc_brand_reels'`;
+                db.query(checkTableQuery, (tableErr, tableResults) => {
+                    if (tableErr) {
+                        console.error('Error checking table existence:', tableErr);
+                        return res.status(500).json({
+                            success: false,
+                            message: 'Error checking database table',
+                            error: tableErr.message
                         });
                     }
-                    return res.status(500).json({
-                        success: false,
-                        message: 'Error saving brand reel',
-                        error: err.message
-                    });
-                }
-
-                const reelId = result.insertId;
-                console.log('Brand reel inserted successfully, ID:', reelId);
-
-                return res.status(201).json({
-                    success: true,
-                    message: 'Brand reel uploaded successfully',
-                    data: { reelId }
+                    
+                    if (tableResults.length === 0) {
+                        console.error('Table oc_brand_reels does not exist in database');
+                        return res.status(500).json({
+                            success: false,
+                            message: 'Table oc_brand_reels not found in ipshopy_reels database. Please create the table first.',
+                            error: 'Table does not exist'
+                        });
+                    }
+                    
+                    console.log('✅ Table oc_brand_reels exists, proceeding with insert');
+                    attemptInsert();
                 });
-            });
+            };
+
+                // If category is 'other', create new category first
+                if (String(category) === 'other' && otherCategoryName) {
+                    const suggestQuery = `
+                        INSERT INTO oc_reel_category (name, description, sort_order, status, date_added)
+                        VALUES (?, NULL, 0, 0, NOW())
+                    `;
+                    db.query(suggestQuery, [otherCategoryName], (catErr, catResult) => {
+                        if (catErr) {
+                            console.error('Database error creating other category:', catErr);
+                            return res.status(500).json({
+                                success: false,
+                                message: 'Error creating category',
+                                error: catErr.message
+                            });
+                        }
+                        const newCatId = catResult.insertId;
+                        handleCategoryAndInsert(newCatId);
+                    });
+                } else {
+                    // Use the provided category ID
+                    const catId = parseInt(category, 10);
+                    if (isNaN(catId)) {
+                        return res.status(400).json({
+                            success: false,
+                            message: 'Invalid category ID'
+                        });
+                    }
+                    handleCategoryAndInsert(catId);
+                }
+            } catch (innerError) {
+                console.error('Error in brand reel upload callback:', innerError);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Error uploading brand reel',
+                    error: innerError.message
+                });
+            }
         });
     } catch (error) {
-        console.error('Error uploading brand reel:', error);
+        console.error('Error uploading brand reel (handler catch):', error);
+        console.error('Error stack:', error.stack);
         return res.status(500).json({
             success: false,
             message: 'Error uploading brand reel',
@@ -5205,7 +7004,364 @@ const uploadBrandReel = async (req, res) => {
         });
     }
 };
+
+// Update an existing brand reel
+const updateBrandReel = async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Validate reel ID
+        if (!id) {
+            return res.status(400).json({
+                success: false,
+                message: 'Reel ID is required'
+            });
+        }
+
+        // Extract text fields from req.body
+        const title = req.body.title;
+        const description = req.body.description || '';
+        const category = req.body.category || req.body.category_id;
+        const brandId = req.body.brandId || req.body.brand_id;
+        const otherCategoryName = req.body.otherCategoryName || req.body.new_category_name || '';
+        
+        // Extract multiple product IDs (same logic as uploadBrandReel)
+        let selectedProducts = [];
+        if (req.body.productIds) {
+            try {
+                const parsed = typeof req.body.productIds === 'string' ? JSON.parse(req.body.productIds) : req.body.productIds;
+                selectedProducts = Array.isArray(parsed) ? parsed : [parsed];
+            } catch (e) {
+                selectedProducts = String(req.body.productIds).split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+            }
+        } else if (req.body.product_ids) {
+            if (Array.isArray(req.body.product_ids)) {
+                selectedProducts = req.body.product_ids.map(id => parseInt(id)).filter(id => !isNaN(id));
+            } else {
+                selectedProducts = [parseInt(req.body.product_ids)].filter(id => !isNaN(id));
+            }
+        } else if (req.body.productId || req.body.product_id) {
+            selectedProducts = [parseInt(req.body.productId || req.body.product_id)].filter(id => !isNaN(id));
+        }
+
+        // Validation
+        if (!title || (typeof title === 'string' && title.trim() === '')) {
+            return res.status(400).json({
+                success: false,
+                message: 'Title is required'
+            });
+        }
+
+        if (!category || (category !== 'other' && (category === '' || category === 'undefined'))) {
+            return res.status(400).json({
+                success: false,
+                message: 'Category is required'
+            });
+        }
+
+        if (!brandId || brandId === '' || brandId === 'undefined') {
+            return res.status(400).json({
+                success: false,
+                message: 'Brand is required'
+            });
+        }
+
+        if (!selectedProducts || selectedProducts.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please select at least one product'
+            });
+        }
+
+        // Handle file uploads as optional - only process if they exist
+        const videoFile = req.files && req.files.video ? req.files.video[0] : null;
+        const thumbnailFile = req.files && req.files.thumbnail ? req.files.thumbnail[0] : null;
+        
+        // Enforce max 30s duration if a new video is being uploaded (client-provided metadata)
+        if (videoFile) {
+            const videoDurationClientUpdate = req.body.videoDuration ? parseFloat(String(req.body.videoDuration)) : NaN;
+            if (!Number.isNaN(videoDurationClientUpdate) && videoDurationClientUpdate > 30.0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Video must be 30 seconds or less'
+                });
+            }
+        }
+        
+        let videoUrl = null;
+        
+        // Process video file only if it exists
+        if (videoFile) {
+            try {
+                videoUrl = await uploadToAzure(
+                    videoFile.path,
+                    videoFile.originalname || videoFile.filename,
+                    videoFile.mimetype || 'application/octet-stream'
+                );
+                if (videoUrl) {
+                    // IMPORTANT: Save video URL WITHOUT SAS token to database
+                    // SAS tokens expire, so we append them dynamically when retrieving
+                    videoUrl = stripSASToken(videoUrl);
+                    console.log('[updateBrandReel] Saving video URL to database (without SAS token):', videoUrl.substring(0, 100));
+                    try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
+                } else {
+                    try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
+                    return res.status(502).json({ success: false, message: 'Azure upload failed' });
+                }
+            } catch (e) {
+                console.error('Azure upload failed:', e && e.message ? e.message : e);
+                try { fs.unlink(videoFile.path, () => {}) } catch (_) {}
+                return res.status(502).json({ success: false, message: 'Azure upload failed' });
+            }
+        }
+
+        // Process thumbnail file only if it exists
+        const thumbnailUrl = thumbnailFile ? `/uploads/${thumbnailFile.filename}` : null;
+
+        // Validate brand exists
+        const dbSagar = require('../../Config/db_sagar');
+        const brandCheckQuery = 'SELECT manufacturer_id FROM oc_manufacturer WHERE manufacturer_id = ?';
+        
+        dbSagar.query(brandCheckQuery, [brandId], async (err, brandResults) => {
+            if (err) {
+                console.error('Database error checking brand:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Error validating brand',
+                    error: err.message
+                });
+            }
+            
+            if (brandResults.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid brand selected'
+                });
+            }
+
+            // Handle category - if 'other', create new category first
+            const handleCategoryAndUpdate = (finalCategoryId) => {
+                db.getConnection((err, connection) => {
+                    if (err) {
+                        return res.status(500).json({
+                            success: false,
+                            message: 'Database connection error'
+                        });
+                    }
+
+                    connection.beginTransaction(err => {
+                        if (err) {
+                            connection.release();
+                            return res.status(500).json({
+                                success: false,
+                                message: 'Transaction error'
+                            });
+                        }
+
+                        // Update brand reel
+                        const updateFields = [];
+                        const updateValues = [];
+
+                        updateFields.push('brand_id = ?');
+                        // Convert brand ID to integer for safer handling
+                        const brandIdInt = brandId ? parseInt(brandId, 10) : null;
+                        updateValues.push(!isNaN(brandIdInt) ? brandIdInt : null);
+
+                        updateFields.push('category_id = ?');
+                        // Convert category ID to integer for safer handling
+                        const categoryIdInt = finalCategoryId ? parseInt(finalCategoryId, 10) : null;
+                        updateValues.push(!isNaN(categoryIdInt) ? categoryIdInt : null);
+
+                        updateFields.push('product_id = ?');
+                        // Convert first product ID to integer for safer handling
+                        const firstProductId = selectedProducts.length > 0 ? parseInt(selectedProducts[0], 10) : null;
+                        updateValues.push(!isNaN(firstProductId) ? firstProductId : null); // First product for backward compatibility
+
+                        updateFields.push('title = ?');
+                        updateValues.push(String(title || '').trim());
+
+                        const descriptionToSave = description || null;
+                        updateFields.push('description = ?');
+                        updateValues.push(descriptionToSave ? String(descriptionToSave).trim() : null);
+
+                        if (videoUrl) {
+                            updateFields.push('video_url = ?');
+                            updateValues.push(String(videoUrl));
+                        }
+
+                        if (thumbnailUrl) {
+                            updateFields.push('thumbnail_url = ?');
+                            updateValues.push(String(thumbnailUrl));
+                        }
+
+                        updateFields.push('updated_at = NOW()');
+                        
+                        const updateQuery = `UPDATE oc_brand_reels SET ${updateFields.join(', ')} WHERE id = ?`;
+                        updateValues.push(id);
+
+                        connection.query(updateQuery, updateValues, (err, result) => {
+                            if (err) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    console.error('Error updating brand reel:', err);
+                                    return res.status(500).json({
+                                        success: false,
+                                        message: 'Error updating brand reel',
+                                        error: err.message
+                                    });
+                                });
+                            }
+
+                            if (result.affectedRows === 0) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    return res.status(404).json({
+                                        success: false,
+                                        message: 'Brand reel not found'
+                                    });
+                                });
+                            }
+
+                            // Update products in junction table
+                            const deleteProductsQuery = `DELETE FROM oc_brand_reel_product WHERE reel_id = ?`;
+                            connection.query(deleteProductsQuery, [id], (delErr) => {
+                                if (delErr) {
+                                    return connection.rollback(() => {
+                                        connection.release();
+                                        console.error('Error deleting products:', delErr);
+                                        return res.status(500).json({
+                                            success: false,
+                                            message: 'Error updating products',
+                                            error: delErr.message
+                                        });
+                                    });
+                                }
+
+                                if (selectedProducts.length > 0) {
+                                    // Ensure junction table exists
+                                    const createJunctionTableQuery = `
+                                        CREATE TABLE IF NOT EXISTS oc_brand_reel_product (
+                                            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                                            reel_id BIGINT UNSIGNED NOT NULL,
+                                            product_id BIGINT UNSIGNED NOT NULL,
+                                            PRIMARY KEY (id),
+                                            KEY idx_reel_id (reel_id),
+                                            KEY idx_product_id (product_id),
+                                            UNIQUE KEY unique_reel_product (reel_id, product_id)
+                                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                                    `;
+                                    
+                                    connection.query(createJunctionTableQuery, (tableErr) => {
+                                        if (tableErr) {
+                                            console.error('Error creating junction table:', tableErr);
+                                        }
+
+                                        const insertProductsQuery = `
+                                            INSERT INTO oc_brand_reel_product (reel_id, product_id) 
+                                            VALUES ?
+                                        `;
+                                        // Convert all product IDs to integers for safer handling
+                                        const productValues = selectedProducts.map(pid => {
+                                            const productIdInt = parseInt(pid, 10);
+                                            return [id, !isNaN(productIdInt) ? productIdInt : null];
+                                        }).filter(([_, pid]) => pid !== null);
+                                        
+                                        connection.query(insertProductsQuery, [productValues], (insErr) => {
+                                            if (insErr) {
+                                                return connection.rollback(() => {
+                                                    connection.release();
+                                                    console.error('Error inserting products:', insErr);
+                                                    return res.status(500).json({
+                                                        success: false,
+                                                        message: 'Error updating products',
+                                                        error: insErr.message
+                                                    });
+                                                });
+                                            }
+
+                                            connection.commit((commitErr) => {
+                                                connection.release();
+                                                if (commitErr) {
+                                                    return res.status(500).json({
+                                                        success: false,
+                                                        message: 'Error committing transaction',
+                                                        error: commitErr.message
+                                                    });
+                                                }
+
+                                                return res.status(200).json({
+                                                    success: true,
+                                                    message: 'Brand reel updated successfully',
+                                                    data: { reelId: id, productCount: selectedProducts.length }
+                                                });
+                                            });
+                                        });
+                                    });
+                                } else {
+                                    connection.commit((commitErr) => {
+                                        connection.release();
+                                        if (commitErr) {
+                                            return res.status(500).json({
+                                                success: false,
+                                                message: 'Error committing transaction',
+                                                error: commitErr.message
+                                            });
+                                        }
+
+                                        return res.status(200).json({
+                                            success: true,
+                                            message: 'Brand reel updated successfully'
+                                        });
+                                    });
+                                }
+                            });
+                        });
+                    });
+                });
+            };
+
+            // Handle category
+            if (String(category) === 'other' && otherCategoryName) {
+                const suggestQuery = `
+                    INSERT INTO oc_reel_category (name, description, sort_order, status, date_added)
+                    VALUES (?, NULL, 0, 0, NOW())
+                `;
+                db.query(suggestQuery, [otherCategoryName], (catErr, catResult) => {
+                    if (catErr) {
+                        console.error('Database error creating other category:', catErr);
+                        return res.status(500).json({
+                            success: false,
+                            message: 'Error creating category',
+                            error: catErr.message
+                        });
+                    }
+                    const newCatId = catResult.insertId;
+                    handleCategoryAndUpdate(newCatId);
+                });
+            } else {
+                // Convert category to integer for safer handling
+                const catId = parseInt(category, 10);
+                if (isNaN(catId)) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Invalid category ID'
+                    });
+                }
+                handleCategoryAndUpdate(catId);
+            }
+        });
+    } catch (error) {
+        console.error('Update brand reel error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to update brand reel',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
+    getApprovedInfluencersWithReelCounts,
     getSellers,
     getSellerProducts,
     getBrands,
@@ -5228,12 +7384,18 @@ module.exports = {
     getSellerDashboardStats,
     getRecentSellerReels,
     getApprovedReelsCount,
+    getRecentApprovedReels,
     approveSellerReel,
     rejectSellerReel,
     approveInfluencerReel, // Add the new function for approving influencer reels
     rejectInfluencerReel,  // Add the new function for rejecting influencer reels
     getAllPendingSellerReels,
     getAllApprovedSellerReels,
+    getApprovedInfluencersWithReelCounts,
+    getAllApprovedInfluencerReels,
     getBrandReels,
-    uploadBrandReel
+    uploadBrandReel,
+    updateBrandReel,
+    deleteBrandReel,
+    editReelAzure // Export the Azure edit function
 };

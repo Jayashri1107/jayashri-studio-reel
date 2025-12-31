@@ -13,6 +13,7 @@ const connectionConfig = {
 
 const dbName = process.env.MYSQL_DB || 'ipshopy_reels';
 const sqlFile = path.join(__dirname, 'reels-ipshopy.sql');
+const additionalSqlFile = path.join(__dirname, 'add-seller-approvals-table.sql');
 
 console.log('🚀 Starting database setup...');
 console.log(`📁 SQL File: ${sqlFile}`);
@@ -33,8 +34,8 @@ connection.connect((err) => {
 
     console.log('✅ Connected to MySQL server');
 
-    // Read SQL file
-    console.log('📖 Reading SQL file...');
+    // Read main SQL file
+    console.log('📖 Reading main SQL file...');
     fs.readFile(sqlFile, 'utf8', (err, sql) => {
         if (err) {
             console.error('❌ Error reading SQL file:', err.message);

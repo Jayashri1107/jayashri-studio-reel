@@ -8,6 +8,7 @@ const upload = require('../Config/multerConfig');
 router.get('/pending', AuthMiddleware.Auth, SellerApprovalController.GetPendingApprovals);
 router.get('/approved', AuthMiddleware.Auth, SellerApprovalController.GetApprovedSellers);
 router.get('/reel-applications', SellerApprovalController.GetSellerReelApplications);
+router.get('/reel-applications-test', SellerApprovalController.GetSellerReelApplications);
 router.post('/approve', SellerApprovalController.ApproveSeller);
 router.post('/reject', SellerApprovalController.RejectSeller);
 

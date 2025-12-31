@@ -15,8 +15,8 @@ const Login = async (req, res) => {
             });
         }
 
-        // Query user from database - Check for both email and username
-        const query = 'SELECT * FROM oc_admin_user WHERE (email = ? OR username = ?) AND status = 1';
+        // Query user from database - Check for both email and username (status checked later)
+        const query = 'SELECT * FROM oc_admin_user WHERE (email = ? OR username = ?)';
         db.query(query, [identifier, identifier], async (err, results) => {
             if (err) {
                 console.error('Database error:', err);
@@ -34,6 +34,14 @@ const Login = async (req, res) => {
             }
 
             const user = results[0];
+
+            // Check inactive status explicitly
+            if (!user.status || Number(user.status) !== 1) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'You are inactive'
+                });
+            }
 
             // Verify password
             const isPasswordValid = await bcrypt.compare(password, user.password);
@@ -135,7 +143,7 @@ const Signup = async (req, res) => {
                 const role = 1; // Assuming 1 is the admin user group ID
                 const insertQuery = `
                     INSERT INTO oc_admin_user (username, firstname, lastname, email, telephone, password, salt, status, date_added, user_group_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, NOW(), ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
                 `;
 
                 // Generate a random salt for the user
@@ -143,7 +151,7 @@ const Signup = async (req, res) => {
 
                 db.query(
                     insertQuery,
-                    [username, firstName, lastName, email, phone || null, passwordHash, salt, role],
+                    [username, firstName, lastName, email, phone || null, passwordHash, salt, 1, role],
                     (err, result) => {
                         if (err) {
                             console.error('Database insert error:', err);
@@ -228,40 +236,67 @@ const GetCurrentUser = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        const query = `
-            SELECT u.user_id as id, u.email, u.user_group_id as role, u.firstname as first_name, u.lastname as last_name, u.telephone as phone, u.status as is_active
-            FROM oc_admin_user u
-            WHERE u.user_id = ?
-        `;
-
-        db.query(query, [userId], (err, results) => {
-            if (err) {
-                console.error('Database error:', err);
-                return res.status(500).json({
-                    success: false,
-                    message: 'Database error occurred'
-                });
+        const ensureImageColumn = `SHOW COLUMNS FROM oc_admin_user LIKE 'image'`;
+        db.query(ensureImageColumn, [], (colErr, colRes) => {
+            if (colErr) {
+                console.error('Error checking image column:', colErr);
+                return res.status(500).json({ success: false, message: 'Database error occurred' });
             }
-
-            if (results.length === 0) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'User not found'
+            const hasImage = Array.isArray(colRes) && colRes.length > 0;
+            const addColumnIfMissing = hasImage
+                ? Promise.resolve()
+                : new Promise((resolve, reject) => {
+                    const alter = `ALTER TABLE oc_admin_user ADD COLUMN image VARCHAR(255) NULL`;
+                    db.query(alter, [], (alterErr) => {
+                        if (alterErr && alterErr.code !== 'ER_DUP_FIELDNAME') {
+                            console.error('Error adding image column:', alterErr);
+                            reject(alterErr);
+                        } else {
+                            resolve();
+                        }
+                    });
                 });
-            }
-
-            const user = results[0];
-            res.json({
-                success: true,
-                user: {
-                    id: user.id,
-                    email: user.email,
-                    role: user.role,
-                    firstName: user.first_name,
-                    lastName: user.last_name,
-                    phone: user.phone,
-                    isActive: user.is_active
-                }
+            
+            addColumnIfMissing.then(() => {
+                const query = `
+                    SELECT u.user_id as id, u.email, u.user_group_id as role, u.firstname as first_name, u.lastname as last_name, u.telephone as phone, u.status as is_active, u.image, u.username
+                    FROM oc_admin_user u
+                    WHERE u.user_id = ?
+                `;
+                db.query(query, [userId], (err, results) => {
+                    if (err) {
+                        console.error('Database error:', err);
+                        return res.status(500).json({
+                            success: false,
+                            message: 'Database error occurred'
+                        });
+                    }
+                    
+                    if (results.length === 0) {
+                        return res.status(404).json({
+                            success: false,
+                            message: 'User not found'
+                        });
+                    }
+                    
+                    const user = results[0];
+                    res.json({
+                        success: true,
+                        user: {
+                            id: user.id,
+                            email: user.email,
+                            role: user.role,
+                            firstName: user.first_name,
+                            lastName: user.last_name,
+                            username: user.username,
+                            phone: user.phone,
+                            isActive: user.is_active,
+                            image: user.image || null
+                        }
+                    });
+                });
+            }).catch(() => {
+                return res.status(500).json({ success: false, message: 'Database error occurred' });
             });
         });
     } catch (error) {
@@ -270,6 +305,76 @@ const GetCurrentUser = async (req, res) => {
             success: false,
             message: error.message
         });
+    }
+};
+
+// Update current user's profile
+const UpdateMyProfile = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { firstName, lastName, email, mobile } = req.body;
+
+        const fields = [];
+        const params = [];
+        if (firstName !== undefined) { fields.push('firstname = ?'); params.push(firstName); }
+        if (lastName !== undefined) { fields.push('lastname = ?'); params.push(lastName); }
+        if (email !== undefined) { fields.push('email = ?'); params.push(email); }
+        if (mobile !== undefined) { fields.push('telephone = ?'); params.push(mobile); }
+
+        if (fields.length === 0) {
+            return res.status(400).json({ success: false, message: 'No fields to update' });
+        }
+        const query = `UPDATE oc_admin_user SET ${fields.join(', ')} WHERE user_id = ?`;
+        params.push(userId);
+        db.query(query, params, (err) => {
+            if (err) {
+                return res.status(500).json({ success: false, message: 'Database error: ' + err.message });
+            }
+            return res.json({ success: true, message: 'Profile updated' });
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Change password with current password verification
+const ChangePassword = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { currentPassword, newPassword } = req.body;
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ success: false, message: 'Current and new passwords are required' });
+        }
+        const strongRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
+        if (!strongRegex.test(newPassword)) {
+            return res.status(400).json({ success: false, message: 'Password must be 8+ chars and include upper, lower, number, special character' });
+        }
+        const q = 'SELECT password FROM oc_admin_user WHERE user_id = ?';
+        db.query(q, [userId], async (err, results) => {
+            if (err) {
+                return res.status(500).json({ success: false, message: 'Database error: ' + err.message });
+            }
+            if (!results.length) {
+                return res.status(404).json({ success: false, message: 'User not found' });
+            }
+            const storedHash = results[0].password;
+            const match = await bcrypt.compare(currentPassword, storedHash);
+            if (!match) {
+                return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+            }
+            const saltRounds = 10;
+            const passwordHash = await bcrypt.hash(newPassword, saltRounds);
+            const salt = Math.random().toString(36).substring(2, 12);
+            const uq = 'UPDATE oc_admin_user SET password = ?, salt = ? WHERE user_id = ?';
+            db.query(uq, [passwordHash, salt, userId], (uErr) => {
+                if (uErr) {
+                    return res.status(500).json({ success: false, message: 'Failed to update password: ' + uErr.message });
+                }
+                return res.json({ success: true, message: 'Password updated successfully' });
+            });
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -573,75 +678,7 @@ const UpdateUser = async (req, res) => {
     }
 };
 
-// Get user group permissions
-const GetUserGroupPermissions = async (req, res) => {
-    try {
-        const { groupId } = req.params;
-        
-        if (!groupId) {
-            return res.status(400).json({
-                success: false,
-                message: 'Group ID is required'
-            });
-        }
 
-        const query = 'SELECT * FROM oc_user_groups WHERE user_group_id = ?';
-
-        db.query(query, [groupId], (err, results) => {
-            if (err) {
-                console.error('Database error:', err);
-                return res.status(500).json({
-                    success: false,
-                    message: 'Database error occurred: ' + err.message
-                });
-            }
-            
-            if (results.length === 0) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'User group not found'
-                });
-            }
-            
-            const group = results[0];
-            
-            // Parse JSON strings to arrays with error handling
-            let accessPermissions = [];
-            let modificationPermissions = [];
-            
-            try {
-                accessPermissions = JSON.parse(group.access_permissions || '[]');
-            } catch (parseError) {
-                console.error('Error parsing access_permissions:', parseError);
-                accessPermissions = [];
-            }
-            
-            try {
-                modificationPermissions = JSON.parse(group.modification_permissions || '[]');
-            } catch (parseError) {
-                console.error('Error parsing modification_permissions:', parseError);
-                modificationPermissions = [];
-            }
-            
-            res.json({
-                success: true,
-                group: {
-                    id: group.user_group_id,
-                    name: group.name,
-                    accessPermissions,
-                    modificationPermissions,
-                    isActive: group.is_active
-                }
-            });
-        });
-    } catch (error) {
-        console.error('GetUserGroupPermissions error:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-};
 
 module.exports = {
     Login,
@@ -652,5 +689,6 @@ module.exports = {
     GetAllUsers,
     GetUserById,
     UpdateUser,
-    GetUserGroupPermissions
+    UpdateMyProfile,
+    ChangePassword
 };
