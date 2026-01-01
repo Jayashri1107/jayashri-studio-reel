@@ -994,121 +994,78 @@ const toggleReelLike = async (req, res) => {
     }
     
     try {
-        // Check if user has already liked this reel
-        const checkLikeQuery = `
-            SELECT * FROM reel_likes 
-            WHERE reel_id = ? AND user_id = ?
+        const ensureTableSQL = `
+            CREATE TABLE IF NOT EXISTS oc_reel_likes (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                reel_id INT NOT NULL,
+                reel_type ENUM('seller','influencer') NOT NULL,
+                user_id INT NOT NULL,
+                status TINYINT(1) NOT NULL DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_reel_type_user (reel_id, reel_type, user_id),
+                INDEX idx_reel (reel_id),
+                INDEX idx_user (user_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         `;
-        
-        db.query(checkLikeQuery, [id, userId], (checkErr, checkResults) => {
-            if (checkErr) {
-                console.error('Error checking existing like:', checkErr);
-                return res.status(500).json({ 
-                    success: false, 
-                    message: 'Error processing like',
-                    error: checkErr.message 
-                });
-            }
-            
-            if (checkResults.length > 0) {
-                // User has already liked this reel, so remove the like (unlike)
-                const removeLikeQuery = `
-                    DELETE FROM reel_likes 
-                    WHERE reel_id = ? AND user_id = ?
-                `;
-                
-                db.query(removeLikeQuery, [id, userId], (removeErr, removeResult) => {
-                    if (removeErr) {
-                        console.error('Error removing like:', removeErr);
-                        return res.status(500).json({ 
-                            success: false, 
-                            message: 'Error removing like',
-                            error: removeErr.message 
+        db.query(ensureTableSQL, () => {
+            const typeQuery = `
+                SELECT 'influencer' AS reel_type FROM oc_influencer_reels WHERE reel_id = ?
+                UNION
+                SELECT 'seller' AS reel_type FROM oc_seller_reels WHERE reel_id = ?
+                LIMIT 1
+            `;
+            db.query(typeQuery, [id, id], (typeErr, typeRows) => {
+                if (typeErr) {
+                    return res.status(500).json({ success: false, message: 'Error determining reel type', error: typeErr.message });
+                }
+                if (!typeRows || typeRows.length === 0) {
+                    return res.status(404).json({ success: false, message: 'Reel not found' });
+                }
+                const reelType = typeRows[0].reel_type;
+                const checkSQL = `SELECT id, status FROM oc_reel_likes WHERE reel_id = ? AND reel_type = ? AND user_id = ?`;
+                db.query(checkSQL, [id, reelType, userId], (chkErr, chkRows) => {
+                    if (chkErr) {
+                        return res.status(500).json({ success: false, message: 'Error processing like', error: chkErr.message });
+                    }
+                    if (chkRows && chkRows.length > 0) {
+                        const row = chkRows[0];
+                        const newStatus = row.status ? 0 : 1;
+                        const updSQL = `UPDATE oc_reel_likes SET status = ?, created_at = NOW() WHERE id = ?`;
+                        db.query(updSQL, [newStatus, row.id], (updErr) => {
+                            if (updErr) {
+                                return res.status(500).json({ success: false, message: 'Error updating like', error: updErr.message });
+                            }
+                            const countSQL = `SELECT COUNT(*) AS like_count FROM oc_reel_likes WHERE reel_id = ? AND reel_type = ? AND status = 1`;
+                            db.query(countSQL, [id, reelType], (cntErr, cntRows) => {
+                                const likeCount = (!cntErr && cntRows && cntRows[0]) ? Number(cntRows[0].like_count || 0) : 0;
+                                return res.status(200).json({
+                                    success: true,
+                                    message: newStatus ? 'Reel liked successfully' : 'Reel unliked successfully',
+                                    liked: Boolean(newStatus),
+                                    like_count: likeCount
+                                });
+                            });
+                        });
+                    } else {
+                        const insSQL = `INSERT INTO oc_reel_likes (reel_id, reel_type, user_id, status, created_at) VALUES (?, ?, ?, 1, NOW())`;
+                        db.query(insSQL, [id, reelType, userId], (insErr) => {
+                            if (insErr) {
+                                return res.status(500).json({ success: false, message: 'Error adding like', error: insErr.message });
+                            }
+                            const countSQL = `SELECT COUNT(*) AS like_count FROM oc_reel_likes WHERE reel_id = ? AND reel_type = ? AND status = 1`;
+                            db.query(countSQL, [id, reelType], (cntErr, cntRows) => {
+                                const likeCount = (!cntErr && cntRows && cntRows[0]) ? Number(cntRows[0].like_count || 0) : 0;
+                                return res.status(200).json({
+                                    success: true,
+                                    message: 'Reel liked successfully',
+                                    liked: true,
+                                    like_count: likeCount
+                                });
+                            });
                         });
                     }
-                    
-                    // Decrement like count in the appropriate table
-                    const decrementLikesQuery = `
-                        UPDATE oc_influencer_reels
-                        SET likes = likes - 1 
-                        WHERE reel_id = ?
-                    `;
-                    
-                    db.query(decrementLikesQuery, [id], (decErr, decResult) => {
-                        if (decErr) {
-                            console.error('Error decrementing influencer reel likes:', decErr);
-                            // Try seller reels
-                            const decrementSellerLikesQuery = `
-                                UPDATE oc_seller_reels
-                                SET likes = likes - 1 
-                                WHERE reel_id = ?
-                            `;
-                            
-                            db.query(decrementSellerLikesQuery, [id], (sellDecErr, sellDecResult) => {
-                                if (sellDecErr) {
-                                    console.error('Error decrementing seller reel likes:', sellDecErr);
-                                }
-                                // We still return success even if decrement fails
-                            });
-                        }
-                        
-                        return res.status(200).json({
-                            success: true,
-                            message: 'Reel unliked successfully',
-                            liked: false
-                        });
-                    });
                 });
-            } else {
-                // User hasn't liked this reel yet, so add the like
-                const addLikeQuery = `
-                    INSERT INTO reel_likes (reel_id, user_id, created_at)
-                    VALUES (?, ?, NOW())
-                `;
-                
-                db.query(addLikeQuery, [id, userId], (addErr, addResult) => {
-                    if (addErr) {
-                        console.error('Error adding like:', addErr);
-                        return res.status(500).json({ 
-                            success: false, 
-                            message: 'Error adding like',
-                            error: addErr.message 
-                        });
-                    }
-                    
-                    // Increment like count in the appropriate table
-                    const incrementLikesQuery = `
-                        UPDATE oc_influencer_reels
-                        SET likes = likes + 1 
-                        WHERE reel_id = ?
-                    `;
-                    
-                    db.query(incrementLikesQuery, [id], (incErr, incResult) => {
-                        if (incErr) {
-                            console.error('Error incrementing influencer reel likes:', incErr);
-                            // Try seller reels
-                            const incrementSellerLikesQuery = `
-                                UPDATE oc_seller_reels
-                                SET likes = likes + 1 
-                                WHERE reel_id = ?
-                            `;
-                            
-                            db.query(incrementSellerLikesQuery, [id], (sellIncErr, sellIncResult) => {
-                                if (sellIncErr) {
-                                    console.error('Error incrementing seller reel likes:', sellIncErr);
-                                }
-                                // We still return success even if increment fails
-                            });
-                        }
-                        
-                        return res.status(200).json({
-                            success: true,
-                            message: 'Reel liked successfully',
-                            liked: true
-                        });
-                    });
-                });
-            }
+            });
         });
     } catch (error) {
         console.error('Toggle reel like error:', error);
@@ -1117,6 +1074,111 @@ const toggleReelLike = async (req, res) => {
             message: 'Failed to toggle reel like',
             error: error.message 
         });
+    }
+};
+
+// Sync like counts from reels tables into oc_reel_likes summary row for a specific reel
+const syncReelLikesSummary = async (req, res) => {
+    const { id } = req.params;
+    if (!id) {
+        return res.status(400).json({ success: false, message: 'Reel ID is required' });
+    }
+    try {
+        const qInf = 'SELECT likes FROM oc_influencer_reels WHERE reel_id = ?';
+        const qSel = 'SELECT likes FROM oc_seller_reels WHERE reel_id = ?';
+        db.query(qInf, [id], (e1, r1) => {
+            const infLikes = (!e1 && r1 && r1.length > 0) ? Number(r1[0].likes || 0) : 0;
+            db.query(qSel, [id], (e2, r2) => {
+                const selLikes = (!e2 && r2 && r2.length > 0) ? Number(r2[0].likes || 0) : 0;
+                const total = infLikes + selLikes;
+                const createLikesTable = `
+                    CREATE TABLE IF NOT EXISTS oc_reel_likes (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        reel_id INT NOT NULL,
+                        customer_id INT NOT NULL,
+                        customer_type ENUM('seller','influencer','customer','summary') NOT NULL,
+                        like_count INT DEFAULT 0,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE KEY uk_reel_customer_type (reel_id, customer_id, customer_type),
+                        INDEX idx_reel (reel_id),
+                        INDEX idx_customer (customer_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                `;
+                db.query(createLikesTable, () => {
+                    const upsert = `
+                        INSERT INTO oc_reel_likes (reel_id, customer_id, customer_type, like_count, created_at)
+                        VALUES (?, 0, 'summary', ?, NOW())
+                        ON DUPLICATE KEY UPDATE like_count = VALUES(like_count), created_at = NOW()
+                    `;
+                    db.query(upsert, [id, total], (err) => {
+                        if (err) {
+                            return res.status(500).json({ success: false, message: 'Failed to sync likes', error: err.message });
+                        }
+                        return res.status(200).json({ success: true, message: 'Likes synced', reel_id: Number(id), like_count: total });
+                    });
+                });
+            });
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: 'Failed to sync likes', error: error.message });
+    }
+};
+
+// Sync like counts for all reels into oc_reel_likes summary rows
+const syncAllReelLikesSummary = async (req, res) => {
+    try {
+        const qAll = `
+            SELECT reel_id, likes, 'influencer' AS src FROM oc_influencer_reels
+            UNION ALL
+            SELECT reel_id, likes, 'seller' AS src FROM oc_seller_reels
+        `;
+        db.query(qAll, [], (err, rows) => {
+            if (err) {
+                return res.status(500).json({ success: false, message: 'Failed to fetch reels', error: err.message });
+            }
+            const map = new Map();
+            rows.forEach(r => {
+                const rid = Number(r.reel_id);
+                const likes = Number(r.likes || 0);
+                map.set(rid, (map.get(rid) || 0) + likes);
+            });
+            const createLikesTable = `
+                CREATE TABLE IF NOT EXISTS oc_reel_likes (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    reel_id INT NOT NULL,
+                    customer_id INT NOT NULL,
+                    customer_type ENUM('seller','influencer','customer','summary') NOT NULL,
+                    like_count INT DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_reel_customer_type (reel_id, customer_id, customer_type),
+                    INDEX idx_reel (reel_id),
+                    INDEX idx_customer (customer_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            `;
+            db.query(createLikesTable, () => {
+                const upsert = `
+                    INSERT INTO oc_reel_likes (reel_id, customer_id, customer_type, like_count, created_at)
+                    VALUES (?, 0, 'summary', ?, NOW())
+                    ON DUPLICATE KEY UPDATE like_count = VALUES(like_count), created_at = NOW()
+                `;
+                const keys = Array.from(map.keys());
+                let processed = 0, failed = 0;
+                if (keys.length === 0) {
+                    return res.status(200).json({ success: true, message: 'No reels to sync', processed, failed });
+                }
+                keys.forEach(rid => {
+                    const cnt = map.get(rid) || 0;
+                    db.query(upsert, [rid, cnt], (e) => {
+                        if (e) failed++; else processed++;
+                        if (processed + failed === keys.length) {
+                            return res.status(200).json({ success: true, message: 'Likes synced for all reels', processed, failed });
+                        }
+                    });
+                });
+            });
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: 'Failed to sync likes', error: error.message });
     }
 };
 
@@ -3139,7 +3201,8 @@ const getInfluencerReels = async (req, res) => {
                     ELSE 'unknown'
                 END as status,
                 0 as views,
-                0 as likes,
+                COUNT(CASE WHEN rl.status = 1 THEN rl.id END) as likes,
+                MAX(CASE WHEN rl.user_id = ? AND rl.status = 1 THEN 1 ELSE 0 END) as liked_by_me,
                 ir.date_added as created_at,
                 ir.video_url,
                 ir.thumbnail,
@@ -3148,10 +3211,11 @@ const getInfluencerReels = async (req, res) => {
             LEFT JOIN oc_influencer_reel_to_category irtc ON ir.reel_id = irtc.reel_id
             LEFT JOIN oc_reel_category orc ON irtc.category_id = orc.reel_category_id
             LEFT JOIN oc_influencer_reel_product irp ON ir.reel_id = irp.reel_id
+            LEFT JOIN oc_reel_likes rl ON rl.reel_id = ir.reel_id AND rl.reel_type = 'influencer'
             WHERE ir.influencer_id = ?
         `;
         
-        const queryParams = [userId];
+        const queryParams = [userId, userId];
         
         // Add filters if provided
         if (title) {
@@ -3401,7 +3465,8 @@ const getSellerReels = async (req, res) => {
                         ELSE 'unknown'
                     END as status,
                     0 as views,
-                    0 as likes,
+                    COUNT(CASE WHEN rl.status = 1 THEN rl.id END) as likes,
+                    MAX(CASE WHEN rl.user_id = ? AND rl.status = 1 THEN 1 ELSE 0 END) as liked_by_me,
                     sr.date_added as created_at,
                     sr.video_url,
                     sr.thumbnail,
@@ -3410,10 +3475,12 @@ const getSellerReels = async (req, res) => {
                 LEFT JOIN oc_seller_reel_to_category srtc ON sr.reel_id = srtc.reel_id
                 LEFT JOIN oc_reel_category orc ON srtc.category_id = orc.reel_category_id
                 LEFT JOIN oc_seller_reel_product srp ON sr.reel_id = srp.reel_id
+                LEFT JOIN oc_reel_likes rl ON rl.reel_id = sr.reel_id AND rl.reel_type = 'seller'
                 WHERE sr.seller_id = ?
             `;
             
-            const queryParams = [vendorId];
+            const userParam = req.user && req.user.id ? req.user.id : 0;
+            const queryParams = [userParam, vendorId];
             
             // Add filters to query
             if (title) {
@@ -3994,6 +4061,8 @@ const getReelById = async (req, res) => {
                             const baseUrl = `${req.protocol}://${req.get('host')}`;
                             const fullReel = {
                                 ...reel,
+
+                                
                                 product_ids: productIds,
                                 seller_id: reel.seller_id
                             };
@@ -4024,8 +4093,8 @@ const getReelById = async (req, res) => {
                                     // For relative paths like /uploads/filename, we need to ensure they're accessible
                                     // The uploads are served at /uploads, not /api/studio/reels/uploads
                                     fullReel.thumbnail = reel.thumbnail.startsWith('/uploads') ? 
-                                        // `http://localhost:3189${reel.thumbnail}` : 
-                                        `https://studio-api.ipshopy.com${reel.thumbnail}` : 
+                                        `http://localhost:3189${reel.thumbnail}` : 
+                                        // `https://studio-api.ipshopy.com${reel.thumbnail}` : 
                                         `${baseUrl}${reel.thumbnail}`;
                                 }
                             }
@@ -7399,5 +7468,7 @@ module.exports = {
     uploadBrandReel,
     updateBrandReel,
     deleteBrandReel,
-    editReelAzure // Export the Azure edit function
+    editReelAzure, // Export the Azure edit function
+    syncReelLikesSummary,
+    syncAllReelLikesSummary
 };

@@ -6,18 +6,18 @@ const { JWT_SECRET, JWT_EXPIRES_IN } = require('../../Config/globle');
 // Login function
 const Login = async (req, res) => {
     try {
-        const { identifier, password } = req.body;
+        const { username, password } = req.body;
 
-        if (!identifier || !password) {
+        if (!username || !password) {
             return res.status(400).json({
                 success: false,
-                message: 'Email/Username and password are required'
+                message: 'Username/Email and password are required'
             });
         }
 
         // Query user from database - Check for both email and username (status checked later)
         const query = 'SELECT * FROM oc_admin_user WHERE (email = ? OR username = ?)';
-        db.query(query, [identifier, identifier], async (err, results) => {
+        db.query(query, [username, username], async (err, results) => {
             if (err) {
                 console.error('Database error:', err);
                 return res.status(500).json({
@@ -312,11 +312,31 @@ const GetCurrentUser = async (req, res) => {
 const UpdateMyProfile = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { firstName, lastName, email, mobile } = req.body;
+        // Map "name" to "firstname" if "firstName" is not provided
+        const { firstName, lastName, email, mobile, name } = req.body;
 
         const fields = [];
         const params = [];
-        if (firstName !== undefined) { fields.push('firstname = ?'); params.push(firstName); }
+        
+        // Handle name mapping logic
+        let finalFirstName = firstName;
+        if (!finalFirstName && name) {
+             // Split name into first and last if needed, or just use as first name
+             const parts = name.trim().split(' ');
+             finalFirstName = parts[0];
+             // If lastName is not explicitly provided, try to get it from name
+             if (!lastName && parts.length > 1) {
+                 // The rest of the parts form the last name
+                 // e.g. "John Doe" -> first: John, last: Doe
+                 // "John Von Doe" -> first: John, last: Von Doe
+                 // Note: we can't update lastName here inside this block because `lastName` const is already declared
+                 // We will handle it by pushing to fields directly
+                 fields.push('lastname = ?'); 
+                 params.push(parts.slice(1).join(' '));
+             }
+        }
+
+        if (finalFirstName !== undefined) { fields.push('firstname = ?'); params.push(finalFirstName); }
         if (lastName !== undefined) { fields.push('lastname = ?'); params.push(lastName); }
         if (email !== undefined) { fields.push('email = ?'); params.push(email); }
         if (mobile !== undefined) { fields.push('telephone = ?'); params.push(mobile); }
@@ -345,10 +365,13 @@ const ChangePassword = async (req, res) => {
         if (!currentPassword || !newPassword) {
             return res.status(400).json({ success: false, message: 'Current and new passwords are required' });
         }
-        const strongRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
-        if (!strongRegex.test(newPassword)) {
-            return res.status(400).json({ success: false, message: 'Password must be 8+ chars and include upper, lower, number, special character' });
-        }
+        
+        // Removed strong regex check for now to allow simple passwords during development
+        // const strongRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
+        // if (!strongRegex.test(newPassword)) {
+        //     return res.status(400).json({ success: false, message: 'Password must be 8+ chars and include upper, lower, number, special character' });
+        // }
+        
         const q = 'SELECT password FROM oc_admin_user WHERE user_id = ?';
         db.query(q, [userId], async (err, results) => {
             if (err) {

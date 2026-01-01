@@ -40,8 +40,8 @@ const resolveSasToken = () => {
 // ✅ CORS (MUST BE VERY FIRST)
 // ================================
 app.use(cors({
-    origin: ["https://studio-api.ipshopy.com", "https://studio.ipshopy.com", "https://ipshopy.com"],
-    // origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"],
+    // origin: ["https://studio-api.ipshopy.com", "https://studio.ipshopy.com", "https://ipshopy.com"],
+    origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"],
     credentials: true
 }));
 

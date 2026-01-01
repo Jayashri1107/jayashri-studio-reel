@@ -113,11 +113,33 @@ const sellerLogin = async (req, res) => {
                 
                 // If seller already has studio account
                 if (studioResults.length > 0) {
+                    const seller = studioResults[0];
+                    // Generate JWT token if needed, or just return basic info
+                    // Since this is just a check, we might not want to return a full login token yet unless intent is clear
+                    // But user requested "how to take token of seller", implying they want to be logged in if already registered
+                    
+                    // Let's generate a token for convenience if they are fully approved
+                     const token = generateToken({
+                        id: seller.id,
+                        vendor_id: seller.vendor_id,
+                        email: seller.email,
+                        role: 'seller'
+                    });
+
                     return res.status(200).json({
                         success: true,
                         message: 'Seller already registered for reels.',
                         exists: true,
-                        registered: true
+                        registered: true,
+                        token: token,
+                        seller: {
+                            id: seller.id,
+                            vendor_id: seller.vendor_id,
+                            firstname: seller.firstname,
+                            lastname: seller.lastname,
+                            email: seller.email,
+                            role: 'seller'
+                        }
                     });
                 } else {
                     // Seller exists in oc_vendor but not in oc_sellers

@@ -879,6 +879,26 @@ router.post('/:id/view', incrementReelView);
 router.post('/:id/like', verifyToken, toggleReelLike);
 
 /**
+ * @route   POST /api/studio/reels/:id/sync-likes
+ * @desc    Sync like counts for a specific reel into oc_reel_likes summary
+ * @access  Private (Authenticated users)
+ */
+router.post('/:id/sync-likes', verifyToken, (req, res) => {
+    const { syncReelLikesSummary } = require('../Controller/Studio/ReelsController');
+    syncReelLikesSummary(req, res);
+});
+
+/**
+ * @route   POST /api/studio/reels/sync-likes
+ * @desc    Sync like counts for all reels into oc_reel_likes summary
+ * @access  Private (Authenticated users)
+ */
+router.post('/sync-likes', verifyToken, (req, res) => {
+    const { syncAllReelLikesSummary } = require('../Controller/Studio/ReelsController');
+    syncAllReelLikesSummary(req, res);
+});
+
+/**
  * @route   POST /api/studio/reels/:id/follow
  * @desc    Toggle follow for the creator of a specific reel
  * @access  Private (Authenticated users)
