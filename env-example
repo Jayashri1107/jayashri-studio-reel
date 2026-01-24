@@ -1,6 +1,6 @@
 # React App Environment Variables
 # REACT_APP_API_BASE_URL=http://localhost:3189 // Development URL
-REACT_APP_API_BASE_URL=https://admin-studio-api.ipshopy.com // Production URL
+REACT_APP_API_BASE_URL=https://admin-studio.ipshopy.com // Production URL
 REACT_APP_APP_NAME=Ipshopy Studio
 REACT_APP_VERSION=1.0.0
 
