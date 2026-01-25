@@ -51,8 +51,8 @@ const EditUser = () => {
         if (response && response.success) {
           setFormData({
             username: response.data.username,
-            firstname: response.data.firstname,
-            lastname: response.data.lastname,
+            firstname: response.data.first_name || response.data.firstname,
+            lastname: response.data.last_name || response.data.lastname,
             email: response.data.email,
             telephone: response.data.telephone || '',
             user_group_id: response.data.user_group_id,
@@ -234,8 +234,8 @@ const EditUser = () => {
       // Prepare data for API call in the format expected by the server
       const userData = {
         username: formData.username,
-        firstname: formData.firstname,
-        lastname: formData.lastname,
+        first_name: formData.firstname,
+        last_name: formData.lastname,
         email: formData.email,
         telephone: formData.telephone || null,
         user_group_id: formData.user_group_id,

@@ -18,11 +18,11 @@ export default function VideoApproval() {
             id: id || 1,
             title: 'Product Demo Video',
             type: 'seller',
-            productBrand: 'Product ABC',
+            product_brand: 'Product ABC',
             status: 'pending',
-            uploadedBy: 'Seller 1',
-            uploadedAt: '2024-01-15',
-            videoUrl: 'https://example.com/video.mp4',
+            uploaded_by: 'Seller 1',
+            uploaded_at: '2024-01-15',
+            video_url: 'https://example.com/video.mp4',
             thumbnail: '/assets/images/users/avatar-1.jpg',
             description: 'This is a product demonstration video showing the features and benefits.'
         });
@@ -73,7 +73,7 @@ export default function VideoApproval() {
                                 <div className="mb-4">
                                     <div className="ratio ratio-16x9">
                                         <video controls className="rounded">
-                                            <source src={video.videoUrl} type="video/mp4" />
+                                            <source src={video.video_url || video.videoUrl} type="video/mp4" />
                                             Your browser does not support the video tag.
                                         </video>
                                     </div>
@@ -82,11 +82,11 @@ export default function VideoApproval() {
                                 <div className="row mb-3">
                                     <div className="col-md-6">
                                         <p><strong>Type:</strong> <span className="badge bg-info">{video.type}</span></p>
-                                        <p><strong>Product/Brand:</strong> {video.productBrand}</p>
+                                        <p><strong>Product/Brand:</strong> {video.product_brand || video.productBrand}</p>
                                     </div>
                                     <div className="col-md-6">
-                                        <p><strong>Uploaded By:</strong> {video.uploadedBy}</p>
-                                        <p><strong>Uploaded At:</strong> {video.uploadedAt}</p>
+                                        <p><strong>Uploaded By:</strong> {video.uploaded_by || video.uploadedBy}</p>
+                                        <p><strong>Uploaded At:</strong> {video.uploaded_at || video.uploadedAt}</p>
                                     </div>
                                 </div>
                             </div>

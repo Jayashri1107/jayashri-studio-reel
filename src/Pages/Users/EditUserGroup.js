@@ -32,14 +32,14 @@ const EditUserGroup = () => {
           let modificationPermissions = [];
           
           try {
-            accessPermissions = JSON.parse(response.data.access_permissions || '[]');
+            accessPermissions = JSON.parse(response.data.access_permissions || response.data.accessPermissions || '[]');
           } catch (parseError) {
             console.error('Error parsing access_permissions:', parseError);
             accessPermissions = [];
           }
           
           try {
-            modificationPermissions = JSON.parse(response.data.modification_permissions || '[]');
+            modificationPermissions = JSON.parse(response.data.modification_permissions || response.data.modificationPermissions || '[]');
           } catch (parseError) {
             console.error('Error parsing modification_permissions:', parseError);
             modificationPermissions = [];

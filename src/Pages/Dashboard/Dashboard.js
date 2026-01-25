@@ -51,23 +51,24 @@ export default function Dashboard() {
         try {
             const response = await ApiService.getApprovedReelsCount();
             if (response.success) {
+                const defaultCount = { approved: 0, pending: 0, rejected: 0, total: 0 };
                 setStats(prevStats => ({
                     ...prevStats,
-                    sellerReels: response.data.sellerReels,
-                    influencerReels: response.data.influencerReels,
-                    brandReels: response.data.brandReels,
-                    totalApprovedReels: response.data.totalApprovedReels,
-                    totalPendingReels: response.data.totalPendingReels,
-                    totalRejectedReels: response.data.totalRejectedReels,
-                    totalAllReels: response.data.totalAllReels,
-                    approved: response.data.totalApprovedReels, // Update the approved count to show total approved reels
-                    totalVideos: response.data.totalAllReels, // Update total videos to show all reels
-                    totalSellers: response.data.totalSellers || 0,
-                    totalInfluencers: response.data.totalInfluencers || 0,
-                    todayAllReels: response.data.todayAllReels || 0,
-                    todayApprovedReels: response.data.todayApprovedReels || 0,
-                    todayPendingReels: response.data.todayPendingReels || 0,
-                    todayRejectedReels: response.data.todayRejectedReels || 0
+                    sellerReels: response.data.seller_reels || response.data.sellerReels || defaultCount,
+                    influencerReels: response.data.influencer_reels || response.data.influencerReels || defaultCount,
+                    brandReels: response.data.brand_reels || response.data.brandReels || defaultCount,
+                    totalApprovedReels: response.data.total_approved_reels || response.data.totalApprovedReels || 0,
+                    totalPendingReels: response.data.total_pending_reels || response.data.totalPendingReels || 0,
+                    totalRejectedReels: response.data.total_rejected_reels || response.data.totalRejectedReels || 0,
+                    totalAllReels: response.data.total_all_reels || response.data.totalAllReels || 0,
+                    approved: response.data.total_approved_reels || response.data.totalApprovedReels || 0,
+                    totalVideos: response.data.total_all_reels || response.data.totalAllReels || 0,
+                    totalSellers: response.data.total_sellers || response.data.totalSellers || 0,
+                    totalInfluencers: response.data.total_influencers || response.data.totalInfluencers || 0,
+                    todayAllReels: response.data.today_all_reels || response.data.todayAllReels || 0,
+                    todayApprovedReels: response.data.today_approved_reels || response.data.todayApprovedReels || 0,
+                    todayPendingReels: response.data.today_pending_reels || response.data.todayPendingReels || 0,
+                    todayRejectedReels: response.data.today_rejected_reels || response.data.todayRejectedReels || 0
                 }));
             }
         } catch (error) {

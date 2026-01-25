@@ -46,8 +46,7 @@ export default function ViewSellerReels() {
                             // Try different name fields
                             const name = seller.name || 
                                        seller.seller_name ||
-                                       `${(seller.firstname || '').trim()} ${(seller.lastname || '').trim()}`.trim() ||
-                                       `${(seller.first_name || '').trim()} ${(seller.last_name || '').trim()}`.trim();
+                                       `${(seller.first_name || seller.firstname || '').trim()} ${(seller.last_name || seller.lastname || '').trim()}`.trim();
                             if (name && !name.startsWith('Seller #') && name.trim()) {
                                 setSellerName(name);
                                 foundSellerName = true;
@@ -64,7 +63,7 @@ export default function ViewSellerReels() {
                                     String(s.vendor_id) === String(sellerId)
                                 );
                                 if (seller) {
-                                    const name = `${(seller.firstname || '').trim()} ${(seller.lastname || '').trim()}`.trim();
+                                    const name = `${(seller.first_name || seller.firstname || '').trim()} ${(seller.last_name || seller.lastname || '').trim()}`.trim();
                                     if (name && name.trim()) {
                                         setSellerName(name);
                                         foundSellerName = true;

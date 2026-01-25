@@ -87,7 +87,7 @@ export default function SellerApprovals() {
                     for (const r of reels) {
                         const status = (r.status || '').toLowerCase();
                         if (status === 'approved') {
-                            const name = s.name || `${(s.firstname || '').trim()} ${(s.lastname || '').trim()}`.trim();
+                            const name = s.name || `${(s.first_name || s.firstname || '').trim()} ${(s.last_name || s.lastname || '').trim()}`.trim();
                             aggregated.push({
                                 ...r,
                                 vendor_id: vendorId,

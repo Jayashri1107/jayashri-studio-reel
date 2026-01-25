@@ -64,9 +64,9 @@ const UsersList = () => {
         setError(err.message || 'Failed to fetch users');
         // Fallback to mock data if API fails
         const mockUsers = [
-          { user_id: 1, username: 'admin', firstname: 'Admin', lastname: 'User', email: 'admin@example.com', telephone: '+1234567890', status: 1, date_added: '2023-01-01' },
-          { user_id: 2, username: 'editor', firstname: 'Jane', lastname: 'Smith', email: 'jane@example.com', telephone: '+1234567891', status: 1, date_added: '2023-01-02' },
-          { user_id: 3, username: 'viewer', firstname: 'Robert', lastname: 'Johnson', email: 'robert@example.com', telephone: '+1234567892', status: 0, date_added: '2023-01-03' },
+          { user_id: 1, username: 'admin', first_name: 'Admin', last_name: 'User', firstname: 'Admin', lastname: 'User', email: 'admin@example.com', telephone: '+1234567890', status: 1, date_added: '2023-01-01' },
+          { user_id: 2, username: 'editor', first_name: 'Jane', last_name: 'Smith', firstname: 'Jane', lastname: 'Smith', email: 'jane@example.com', telephone: '+1234567891', status: 1, date_added: '2023-01-02' },
+          { user_id: 3, username: 'viewer', first_name: 'Robert', last_name: 'Johnson', firstname: 'Robert', lastname: 'Johnson', email: 'robert@example.com', telephone: '+1234567892', status: 0, date_added: '2023-01-03' },
         ];
         setUsers(mockUsers);
       } finally {
@@ -197,8 +197,8 @@ const UsersList = () => {
         // Update with new status using current user data
         const updateData = {
           username: user.username,
-          firstname: user.firstname,
-          lastname: user.lastname,
+          first_name: user.first_name || user.firstname,
+          last_name: user.last_name || user.lastname,
           email: user.email,
           telephone: user.telephone || null,
           user_group_id: user.user_group_id,
@@ -389,7 +389,7 @@ const UsersList = () => {
                         </td>
                         <td>{user.user_id}</td>
                         <td>{user.username}</td>
-                        <td>{user.firstname} {user.lastname}</td>
+                        <td>{user.first_name || user.firstname} {user.last_name || user.lastname}</td>
                         <td>{user.email}</td>
                         <td>{userGroupMap[user.user_group_id] || 'N/A'}</td>
                         <td>

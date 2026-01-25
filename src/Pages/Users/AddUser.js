@@ -242,8 +242,8 @@ const AddUser = () => {
       // Prepare data for API call in the format expected by the server
       const userData = {
         username: formData.username,
-        firstname: formData.firstname,
-        lastname: formData.lastname,
+        first_name: formData.firstname,
+        last_name: formData.lastname,
         email: formData.email,
         telephone: formData.telephone || null,
         password: formData.password,

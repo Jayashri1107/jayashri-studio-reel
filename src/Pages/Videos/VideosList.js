@@ -20,26 +20,26 @@ export default function VideosList() {
                 id: 1,
                 title: 'Product Demo #123',
                 type: 'seller',
-                productBrand: 'Product ABC',
+                product_brand: 'Product ABC',
                 status: 'approved',
                 impressions: 12450,
                 likes: 1234,
                 views: 8901,
-                uploadedBy: 'Seller 1',
-                uploadedAt: '2024-01-15',
+                uploaded_by: 'Seller 1',
+                uploaded_at: '2024-01-15',
                 thumbnail: '/assets/images/users/avatar-1.jpg'
             },
             {
                 id: 2,
                 title: 'Brand Campaign #456',
                 type: 'brand',
-                productBrand: 'Brand XYZ',
+                product_brand: 'Brand XYZ',
                 status: 'pending',
                 impressions: 0,
                 likes: 0,
                 views: 0,
-                uploadedBy: 'Brand Manager',
-                uploadedAt: '2024-01-14',
+                uploaded_by: 'Brand Manager',
+                uploaded_at: '2024-01-14',
                 thumbnail: '/assets/images/users/avatar-2.jpg'
             }
         ]);
@@ -141,7 +141,7 @@ export default function VideosList() {
                                                     </div>
                                                     <div>
                                                         <h6 className="mb-0">{video.title}</h6>
-                                                        <small className="text-muted">{video.uploadedAt}</small>
+                                                        <small className="text-muted">{video.uploaded_at || video.uploadedAt}</small>
                                                     </div>
                                                 </div>
                                             </td>
@@ -150,8 +150,8 @@ export default function VideosList() {
                                                     {video.type.charAt(0).toUpperCase() + video.type.slice(1)}
                                                 </span>
                                             </td>
-                                            <td>{video.productBrand}</td>
-                                            <td>{video.uploadedBy}</td>
+                                            <td>{video.product_brand || video.productBrand}</td>
+                                            <td>{video.uploaded_by || video.uploadedBy}</td>
                                             <td>
                                                 <span className={`badge ${getStatusBadge(video.status)}`}>
                                                     {video.status.charAt(0).toUpperCase() + video.status.slice(1)}

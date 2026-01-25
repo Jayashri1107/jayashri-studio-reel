@@ -72,8 +72,8 @@ export const UserProvider = ({ children }) => {
     const hasPermission = (permission) => {
         if (!userGroup) return false;
         // Check if user has either access or modification permissions
-        return (userGroup.accessPermissions && userGroup.accessPermissions.includes(permission)) || 
-               (userGroup.modificationPermissions && userGroup.modificationPermissions.includes(permission));
+        return ( (userGroup.access_permissions || userGroup.accessPermissions) && (userGroup.access_permissions || userGroup.accessPermissions).includes(permission) ) || 
+               ( (userGroup.modification_permissions || userGroup.modificationPermissions) && (userGroup.modification_permissions || userGroup.modificationPermissions).includes(permission) );
     };
 
     const value = {

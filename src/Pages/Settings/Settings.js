@@ -58,7 +58,7 @@ export default function Settings() {
                 const user = JSON.parse(storedUser);
                 setSettings(prev => ({
                     ...prev,
-                    platformOwnerName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+                    platformOwnerName: `${user.first_name || user.firstName || ''} ${user.last_name || user.lastName || ''}`.trim(),
                     ownerEmail: user.email || '',
                     ownerPhone: user.phone || ''
                 }));

@@ -30,9 +30,11 @@ export default function SellersList() {
         if (filters.name) {
             const filterText = filters.name.toLowerCase().trim();
             result = result.filter(application => 
+                (application.first_name && application.first_name.toLowerCase().includes(filterText)) ||
                 (application.firstname && application.firstname.toLowerCase().includes(filterText)) ||
+                (application.last_name && application.last_name.toLowerCase().includes(filterText)) ||
                 (application.lastname && application.lastname.toLowerCase().includes(filterText)) ||
-                ((application.firstname + ' ' + application.lastname).toLowerCase().includes(filterText))
+                (((application.first_name || application.firstname) + ' ' + (application.last_name || application.lastname)).toLowerCase().includes(filterText))
             );
         }
         if (filters.status) {
@@ -119,7 +121,7 @@ export default function SellersList() {
         setReelApplications((list) => updater(list));
         setFilteredApplications((list) => updater(list));
         try {
-            const response = await api.post('/sellerapproval/approve', { vendorId });
+            const response = await api.post('/sellerapproval/approve', { vendor_id: vendorId });
             if (response.data?.success) {
                 toast.success('Seller approved successfully');
             } else {
@@ -152,7 +154,7 @@ export default function SellersList() {
         setReelApplications((list) => updater(list));
         setFilteredApplications((list) => updater(list));
         try {
-            const response = await api.post('/sellerapproval/reject', { vendorId });
+            const response = await api.post('/sellerapproval/reject', { vendor_id: vendorId });
             if (response.data?.success) {
                 toast.success('Seller rejected successfully');
             } else {
@@ -277,7 +279,7 @@ export default function SellersList() {
                                                         currentApplications.map((application) => (
                                                             <tr key={application.application_id}>
                                                                 <td>{application.application_id}</td>
-                                                                <td>{application.firstname} {application.lastname}</td>
+                                                                <td>{application.first_name || application.firstname} {application.last_name || application.lastname}</td>
                                                                 <td>{application.email}</td>
                                                                 <td>{application.mobile || 'N/A'}</td>
                                                                 <td>{new Date(application.applied_at).toLocaleDateString()}</td>

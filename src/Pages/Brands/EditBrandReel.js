@@ -289,9 +289,7 @@ export default function EditBrandReel() {
             uploadData.append('description', formData.description);
             uploadData.append('category', formData.category);
             uploadData.append('category_id', categoryId);
-            uploadData.append('brandId', formData.brand);
             uploadData.append('brand_id', formData.brand);
-            uploadData.append('productId', formData.product || '');
             uploadData.append('product_id', formData.product || '');
             if (formData.category === 'other' && newCategoryName) {
                 uploadData.append('new_category_name', newCategoryName);

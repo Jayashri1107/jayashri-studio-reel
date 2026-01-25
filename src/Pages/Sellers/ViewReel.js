@@ -39,7 +39,7 @@ export default function ViewReel() {
                     const list = Array.isArray(sellersResp?.data) ? sellersResp.data : [];
                     const match = list.find(s => String(s.vendor_id ?? s.id) === String(id));
                     if (match) {
-                        const name = match.name ?? `${(match.firstname || '')} ${(match.lastname || '')}`.trim();
+                        const name = match.name ?? `${(match.first_name || match.firstName || match.firstname || '')} ${(match.last_name || match.lastName || match.lastname || '')}`.trim();
                         if (name) {
                             setSellerName(name);
                         }
