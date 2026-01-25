@@ -6,7 +6,7 @@ import './Login.css';
 
 
 export default function Login() {
-    const [identifier, setIdentifier] = useState('');
+    const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
 
 
@@ -42,8 +42,8 @@ export default function Login() {
 
     const validateForm = () => {
         const newErrors = {};
-        if (!identifier.trim()) {
-            newErrors.identifier = 'Email or username is required';
+        if (!username.trim()) {
+            newErrors.username = 'Email is required';
         }
         if (!password) {
             newErrors.password = 'Password is required';
@@ -61,9 +61,8 @@ export default function Login() {
         setLoading(true);
         
         try {
-            // Fix the endpoint to match the actual server route
-            const response = await api.post('/Users/User/Login', {
-                identifier,
+            const response = await api.post('/users/login', {
+                username,
                 password
             });
             
@@ -101,27 +100,27 @@ export default function Login() {
                         )}
                         
                         <div className="form-group">
-                            <label htmlFor="UserEmail">Email or Username</label>
+                            <label htmlFor="UserEmail">Email</label>
                             <div className="input-with-icon">
                                 <input 
                                     type="text" 
                                     id="UserEmail" 
-                                    placeholder="Enter your email or username" 
-                                    value={identifier}
+                                    placeholder="Enter your email" 
+                                    value={username}
                                     onChange={(e) => {
-                                        setIdentifier(e.target.value);
-                                        if (errors.identifier) {
-                                            setErrors({...errors, identifier: null});
+                                        setUsername(e.target.value);
+                                        if (errors.username) {
+                                            setErrors({...errors, username: null});
                                         }
                                     }}
-                                    className={errors.identifier ? 'error' : ''}
+                                    className={errors.username ? 'error' : ''}
                                     autoComplete="username"
                                 />
                                 <span className="input-icon">
                                     <i data-lucide="mail"></i>
                                 </span>
                             </div>
-                            {errors.identifier && <span className="error-message">{errors.identifier}</span>}
+                            {errors.username && <span className="error-message">{errors.username}</span>}
                         </div>
                         
                         <div className="form-group">

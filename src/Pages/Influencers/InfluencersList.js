@@ -64,7 +64,7 @@ export default function InfluencersList() {
     const fetchInfluencers = async () => {
         try {
             setLoading(true);
-            const response = await api.get('/Studio/influencer/applications');
+            const response = await api.get('/studio/influencer/applications');
             
             if (response.data.success) {
                 // Map database status values to frontend status values
@@ -180,7 +180,7 @@ export default function InfluencersList() {
         setInfluencers((list) => updater(list));
         setFilteredInfluencers((list) => updater(list));
         try {
-            const response = await api.put(`/Studio/influencer/${id}/approve`);
+            const response = await api.put(`/studio/influencer/${id}/approve`);
             if (response.data?.success) {
                 toast.success('Influencer approved successfully');
             } else {
@@ -213,7 +213,7 @@ export default function InfluencersList() {
         setInfluencers((list) => updater(list));
         setFilteredInfluencers((list) => updater(list));
         try {
-            const response = await api.put(`/Studio/influencer/${id}/reject`);
+            const response = await api.put(`/studio/influencer/${id}/reject`);
             if (response.data?.success) {
                 toast.success('Influencer rejected successfully');
             } else {

@@ -32,7 +32,7 @@ export default function EditProfile() {
     
     const load = async () => {
       try {
-        const resp = await api.get('/Users/me');
+        const resp = await api.get('/users/me');
         if (resp.data?.success) {
           const u = resp.data.user;
           setProfileData({
@@ -158,7 +158,7 @@ export default function EditProfile() {
     
     try {
       // Update basic info
-      await api.put('/Users/profile', {
+      await api.put('/users/profile', {
         firstName: formData.firstName.trim(),
         lastName: formData.lastName.trim(),
         email: formData.email.trim(),
@@ -169,7 +169,7 @@ export default function EditProfile() {
       if (imageFile) {
         const fd = new FormData();
         fd.append('profileImage', imageFile);
-        const up = await api.post('/Users/profile/image', fd, {
+        const up = await api.post('/users/profile/image', fd, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
         if (!up.data?.success) {
@@ -178,7 +178,7 @@ export default function EditProfile() {
       }
 
       // Refresh local user
-      const resp = await api.get('/Users/me');
+      const resp = await api.get('/users/me');
       if (resp.data?.success) {
         localStorage.setItem('user', JSON.stringify(resp.data.user));
         window.dispatchEvent(new Event('user-updated'));

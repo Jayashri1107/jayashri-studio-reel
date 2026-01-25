@@ -37,7 +37,7 @@ class ApiService {
             const filename = file?.name || 'upload.mp4';
             if (filename) headers['x-filename'] = filename;
             if (!targetUrl && baseUrl) {
-                targetUrl = `${baseUrl.replace(/\/$/, '')}/api/UploadReel`;
+                targetUrl = `${baseUrl.replace(/\/$/, '')}/api/uploadreel`;
                 if (functionKey) {
                     headers['x-functions-key'] = functionKey;
                 }
@@ -84,22 +84,22 @@ class ApiService {
     }
 
     static async requestSellerPasswordReset(email) {
-        const resp = await api.post('/Studio/seller/forgot-password', { email });
+        const resp = await api.post('/studio/seller/forgot-password', { email });
         return resp.data;
     }
 
     static async requestInfluencerPasswordReset(email) {
-        const resp = await api.post('/Studio/influencer/forgot-password', { email });
+        const resp = await api.post('/studio/influencer/forgot-password', { email });
         return resp.data;
     }
 
     static async resetSellerPassword(token, password) {
-        const resp = await api.post('/Studio/seller/reset-password', { token, password });
+        const resp = await api.post('/studio/seller/reset-password', { token, password });
         return resp.data;
     }
 
     static async resetInfluencerPassword(token, password) {
-        const resp = await api.post('/Studio/influencer/reset-password', { token, password });
+        const resp = await api.post('/studio/influencer/reset-password', { token, password });
         return resp.data;
     }
 
@@ -187,12 +187,12 @@ class ApiService {
     // Modified by Vaishanvi to fetch only approved sellers from seller_approvals table
     static async getAllSellers() {
         try {
-            const response = await api.get('/SellerApproval/approved-from-approvals');
+            const response = await api.get('/sellerapproval/approved-from-approvals');
             return response.data;
         } catch (error) {
             try {
                 // Fallback to public endpoint
-                const fallbackResponse = await api.get('/SellerApproval/all-public');
+                const fallbackResponse = await api.get('/sellerapproval/all-public');
                 return fallbackResponse.data;
             } catch (fallbackError) {
                 console.error('Error fetching sellers:', fallbackError);

@@ -34,7 +34,7 @@ export default function AddCategory() {
             setIsSubmitting(true);
             
             // Updated to use BASE_URL constant instead of environment variable
-            const response = await fetch(`${BASE_URL}/Categories`, {
+            const response = await fetch(`${BASE_URL}/categories`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

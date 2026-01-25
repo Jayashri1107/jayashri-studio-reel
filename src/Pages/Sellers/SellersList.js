@@ -54,7 +54,7 @@ export default function SellersList() {
     const fetchReelApplications = async () => {
         try {
             setReelLoading(true);
-            const response = await api.get('/SellerApproval/reel-applications');
+            const response = await api.get('/sellerapproval/reel-applications');
             if (response.data && response.data.success) {
                 setReelApplications(response.data.data || []);
                 setFilteredApplications(response.data.data || []);
@@ -119,7 +119,7 @@ export default function SellersList() {
         setReelApplications((list) => updater(list));
         setFilteredApplications((list) => updater(list));
         try {
-            const response = await api.post('/SellerApproval/approve', { vendorId });
+            const response = await api.post('/sellerapproval/approve', { vendorId });
             if (response.data?.success) {
                 toast.success('Seller approved successfully');
             } else {
@@ -152,7 +152,7 @@ export default function SellersList() {
         setReelApplications((list) => updater(list));
         setFilteredApplications((list) => updater(list));
         try {
-            const response = await api.post('/SellerApproval/reject', { vendorId });
+            const response = await api.post('/sellerapproval/reject', { vendorId });
             if (response.data?.success) {
                 toast.success('Seller rejected successfully');
             } else {

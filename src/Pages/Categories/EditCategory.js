@@ -26,7 +26,7 @@ export default function EditCategory() {
         try {
             setLoading(true);
             // Use api instance which includes authentication headers
-            const response = await api.get(`/Categories/${id}`);
+            const response = await api.get(`/categories/${id}`);
             const result = response.data;
             
             if (result.success && result.data) {
@@ -75,7 +75,7 @@ export default function EditCategory() {
             setIsSubmitting(true);
             
             // Use api instance which includes authentication headers
-            const response = await api.put(`/Categories/${id}`, {
+            const response = await api.put(`/categories/${id}`, {
                 name: name,
                 description,
                 status,

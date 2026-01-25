@@ -42,7 +42,7 @@ export default function Profile() {
     const fetchUserProfile = async () => {
         try {
             setLoading(true);
-            const response = await api.get('/Users/me');
+            const response = await api.get('/users/me');
             if (response.data.success) {
                 setUser(response.data.user);
                 // Store user data in localStorage for easy access
@@ -118,9 +118,9 @@ export default function Profile() {
         try {
             const fd = new FormData();
             fd.append('profileImage', file);
-            const up = await api.post('/Users/profile/image', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+            const up = await api.post('/users/profile/image', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
             if (up.data?.success) {
-                const resp = await api.get('/Users/me');
+                const resp = await api.get('/users/me');
                 if (resp.data?.success) {
                     localStorage.setItem('user', JSON.stringify(resp.data.user));
                     setUser(resp.data.user);

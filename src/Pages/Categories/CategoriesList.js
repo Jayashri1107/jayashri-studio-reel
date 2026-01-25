@@ -40,7 +40,7 @@ export default function CategoriesList() {
         try {
             setLoading(true);
             // Updated to use BASE_URL constant instead of environment variable
-            const response = await fetch(`${BASE_URL}/Categories`);
+            const response = await fetch(`${BASE_URL}/categories`);
             const result = await response.json();
             
             if (result.success) {
@@ -79,7 +79,7 @@ export default function CategoriesList() {
         if (confirmDelete) {
             try {
                 // Updated to use BASE_URL constant instead of environment variable
-                const response = await fetch(`${BASE_URL}/Categories/${id}`, {
+                const response = await fetch(`${BASE_URL}/categories/${id}`, {
                     method: 'DELETE'
                 });
                 

@@ -2,6 +2,7 @@
   "name": "admin-dash",
   "version": "0.1.0",
   "private": true,
+  "proxy": "http://localhost:3189",
   "dependencies": {
     "@ckeditor/ckeditor5-alignment": "^40.2.0",
     "@ckeditor/ckeditor5-build-classic": "^40.0.0",

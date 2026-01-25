@@ -11,6 +11,9 @@ const UserGroups = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
   
+  const [selectedGroups, setSelectedGroups] = useState([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  
   // Filter states
   const [filters, setFilters] = useState({
     name: ''
@@ -106,13 +109,64 @@ const UserGroups = () => {
   const handleDeleteGroup = async (groupId) => {
     if (window.confirm('Are you sure you want to delete this user group?')) {
       try {
+        setError('');
         // Delete from database
         await userService.deleteUserGroup(groupId);
         // Update state to remove the deleted group
         setGroups(groups.filter(group => group.user_group_id !== groupId));
+        setSelectedGroups(selectedGroups.filter(id => id !== groupId));
       } catch (err) {
         setError(err.message || 'Failed to delete user group');
       }
+    }
+  };
+
+  const handleSelectGroup = (groupId) => {
+    setSelectedGroups(prev => 
+      prev.includes(groupId) 
+        ? prev.filter(id => id !== groupId)
+        : [...prev, groupId]
+    );
+  };
+
+  const handleSelectAll = () => {
+    if (selectedGroups.length === currentGroups.length && currentGroups.length > 0) {
+      setSelectedGroups([]);
+    } else {
+      setSelectedGroups(currentGroups.map(group => group.user_group_id));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedGroups.length === 0) {
+      alert('Please select at least one user group');
+      return;
+    }
+
+    if (!window.confirm(`Are you sure you want to delete ${selectedGroups.length} user group(s)?`)) {
+      return;
+    }
+
+    setBulkDeleting(true);
+    setError('');
+
+    try {
+      await userService.deleteUserGroups(selectedGroups);
+      
+      const count = selectedGroups.length;
+      
+      // Refresh the list
+      const response = await userService.getUserGroups();
+      if (response && response.success) {
+        setGroups(response.data);
+        setSelectedGroups([]);
+        alert(`${count} user group(s) deleted successfully!`);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to delete user groups');
+      alert('Error: ' + (err.message || 'Failed to delete user groups'));
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -137,9 +191,21 @@ const UserGroups = () => {
           <div className="card">
             <div className="card-header d-flex justify-content-between align-items-center">
               <h4 className="header-title">User Groups</h4>
-              <Link to="/users/groups/add" className="btn btn-primary">
-                <i className="ri-add-line align-middle me-1"></i> Add Group
-              </Link>
+              <div className="d-flex gap-2 align-items-center">
+                {selectedGroups.length > 0 && (
+                  <button
+                    className="btn btn-danger"
+                    onClick={handleBulkDelete}
+                    disabled={bulkDeleting}
+                  >
+                    <i data-lucide="trash-2" style={{width: '16px', height: '16px', marginRight: '6px'}}></i>
+                    Delete ({selectedGroups.length})
+                  </button>
+                )}
+                <Link to="/users/groups/add" className="btn btn-primary">
+                  <i className="ri-add-line align-middle me-1"></i> Add Group
+                </Link>
+              </div>
             </div>
             <div className="card-body">
               {/* Filter Section */}
@@ -176,6 +242,14 @@ const UserGroups = () => {
                 <table className="table table-striped table-centered mb-0">
                   <thead>
                     <tr>
+                      <th>
+                        <input
+                          type="checkbox"
+                          checked={selectedGroups.length === currentGroups.length && currentGroups.length > 0}
+                          onChange={handleSelectAll}
+                          className="form-check-input"
+                        />
+                      </th>
                       <th>ID</th>
                       <th>Name</th>
                       <th>Users</th>
@@ -185,6 +259,14 @@ const UserGroups = () => {
                   <tbody>
                     {currentGroups.map((group) => (
                       <tr key={group.user_group_id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedGroups.includes(group.user_group_id)}
+                            onChange={() => handleSelectGroup(group.user_group_id)}
+                            className="form-check-input"
+                          />
+                        </td>
                         <td>{group.user_group_id}</td>
                         <td>{group.name}</td>
                         <td>{group.users || 0}</td>

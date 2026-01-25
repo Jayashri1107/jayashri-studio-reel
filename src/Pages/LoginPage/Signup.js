@@ -60,7 +60,7 @@ export default function Signup() {
         try {
             console.log('Attempting signup with:', { email: formData.email, firstName: formData.firstName, lastName: formData.lastName });
             // Fix the endpoint to match the actual server route
-            const response = await api.post('/Users/User/Signup', {
+            const response = await api.post('/users/user/signup', {
                 username: formData.username,
                 email: formData.email,
                 password: formData.password,

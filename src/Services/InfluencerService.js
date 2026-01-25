@@ -11,7 +11,7 @@ class InfluencerService {
      */
     static async getAllInfluencerApplications() {
         try {
-            const response = await api.get('/Studio/influencer/applications');
+            const response = await api.get('/studio/influencer/applications');
             return response.data;
         } catch (error) {
             console.error('Error fetching influencer applications:', error);
@@ -26,7 +26,7 @@ class InfluencerService {
      */
     static async getInfluencerById(id) {
         try {
-            const response = await api.get(`/Studio/influencer/applications`);
+            const response = await api.get(`/studio/influencer/applications`);
             if (response.data.success && Array.isArray(response.data.data)) {
                 const influencer = response.data.data.find(inf => inf.id === parseInt(id));
                 if (influencer) {
@@ -61,7 +61,7 @@ class InfluencerService {
      */
     static async updateInfluencer(id, data) {
         try {
-            const response = await api.put(`/Studio/influencer/${id}`, data);
+            const response = await api.put(`/studio/influencer/${id}`, data);
             return response.data;
         } catch (error) {
             console.error('Error updating influencer:', error);
@@ -76,7 +76,7 @@ class InfluencerService {
      */
     static async approveInfluencer(id) {
         try {
-            const response = await api.put(`/Studio/influencer/${id}/approve`);
+            const response = await api.put(`/studio/influencer/${id}/approve`);
             return response.data;
         } catch (error) {
             console.error('Error approving influencer:', error);
@@ -91,7 +91,7 @@ class InfluencerService {
      */
     static async rejectInfluencer(id) {
         try {
-            const response = await api.put(`/Studio/influencer/${id}/reject`);
+            const response = await api.put(`/studio/influencer/${id}/reject`);
             return response.data;
         } catch (error) {
             console.error('Error rejecting influencer:', error);

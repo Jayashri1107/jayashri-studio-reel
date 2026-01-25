@@ -44,7 +44,7 @@ export default function ChangePassword() {
     }
     try {
       setLoading(true);
-      await api.put('/Users/change-password', {
+      await api.put('/users/change-password', {
         currentPassword: form.currentPassword,
         newPassword: form.newPassword
       });
