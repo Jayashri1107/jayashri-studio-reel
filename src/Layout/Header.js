@@ -135,19 +135,19 @@ export default function Header() {
 
                 const applicationMatches = applicationsCache
                     .filter(a => 
-                        (a.firstname || '').toLowerCase().includes(q) || 
-                        (a.lastname || '').toLowerCase().includes(q) || 
-                        ((a.firstname + ' ' + a.lastname) || '').toLowerCase().includes(q) ||
+                        (a.first_name || a.firstname || '').toLowerCase().includes(q) || 
+                        (a.last_name || a.lastname || '').toLowerCase().includes(q) || 
+                        (( (a.first_name || a.firstname) + ' ' + (a.last_name || a.lastname) ) || '').toLowerCase().includes(q) ||
                         (a.email || '').toLowerCase().includes(q) ||
                         (a.mobile || '').toLowerCase().includes(q) ||
                         String(a.application_id || '').includes(q)
                     )
                     .slice(0, 5)
                     .map(a => ({ 
-                        label: `${a.firstname} ${a.lastname}`, 
+                        label: `${a.first_name || a.firstname} ${a.last_name || a.lastname}`, 
                         type: 'applicant', 
                         meta: `App ID: ${a.application_id}`, 
-                        to: `/sellers?search=${encodeURIComponent(`${a.firstname} ${a.lastname}`)}`
+                        to: `/sellers?search=${encodeURIComponent(`${a.first_name || a.firstname} ${a.last_name || a.lastname}`)}`
                     }));
 
                 const all = [...brandReelMatches, ...inflReelMatches, ...catMatches, ...productMatches, ...applicationMatches].slice(0, 15);
@@ -168,7 +168,7 @@ export default function Header() {
         navigate('/Login');
     };
 
-    const displayName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Admin User' : 'Admin User';
+    const displayName = user ? `${user.first_name || user.firstName || ''} ${user.last_name || user.lastName || ''}`.trim() || 'Admin User' : 'Admin User';
     const userImage = user?.image ? `${BASE_URL}${user.image}?t=${imgVersion}` : null;
 
     return (

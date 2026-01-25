@@ -552,27 +552,25 @@ export default function AddBrandReel() {
             if (categoryValue !== 'other' && categoryValue) {
                 uploadData.append('category_id', categoryValue);
             }
-            uploadData.append('brandId', formData.brand || '');
             uploadData.append('brand_id', formData.brand || '');
             
             // Send multiple product IDs
             if (formData.selectedProducts && formData.selectedProducts.length > 0) {
                 const productIds = formData.selectedProducts;
-                uploadData.append('productIds', JSON.stringify(productIds));
+                uploadData.append('product_ids', JSON.stringify(productIds));
                 uploadData.append('product_id', productIds[0]); // First product for backward compatibility
                 productIds.forEach((productId, index) => {
                     uploadData.append(`product_ids[${index}]`, productId);
                 });
             }
             if (formData.category === 'other' && newCategoryName) {
-                uploadData.append('otherCategoryName', newCategoryName);
-                uploadData.append('new_category_name', newCategoryName);
+                uploadData.append('other_category_name', newCategoryName);
             }
             if (formData.videoFile) {
                 uploadData.append('video', formData.videoFile);
                 // Append video duration if available
                 if (formData.videoDuration) {
-                    uploadData.append('videoDuration', String(formData.videoDuration));
+                    uploadData.append('video_duration', String(formData.videoDuration));
                 }
             }
             

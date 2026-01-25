@@ -55,7 +55,7 @@ export default function SellerReels() {
                         summaries.push({ id: `s-unknown`, seller_name: 'Unknown Seller', seller_id: 'unknown', reel_count: 0, views: 0, likes: 0, followers: 0, status: s.status || 'approved' });
                         continue;
                     }
-                    const name = (s.name ?? `${(s.firstname || '').trim()} ${(s.lastname || '').trim()}`.trim()) || `Seller #${vendorId}`;
+                    const name = (s.name ?? `${(s.first_name || s.firstname || '').trim()} ${(s.last_name || s.lastname || '').trim()}`.trim()) || `Seller #${vendorId}`;
                     let views = 0, likes = 0, followers = 0, count = 0;
                     try {
                         const r = await ApiService.getSellerReelsPublic(vendorId);

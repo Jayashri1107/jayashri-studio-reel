@@ -86,7 +86,7 @@ export default function Profile() {
         );
     }
 
-    const displayName = user ? `${user.firstName || user.firstname || ''} ${user.lastName || user.lastname || ''}`.trim() || 'Admin User' : 'Admin User';
+    const displayName = user ? `${user.first_name || user.firstName || user.firstname || ''} ${user.last_name || user.lastName || user.lastname || ''}`.trim() || 'Admin User' : 'Admin User';
     const displayEmail = user?.email || '';
     const displayPhone = user?.phone || user?.telephone || 'Not provided';
     const displayUsername = user?.username || 'N/A';
@@ -106,7 +106,7 @@ export default function Profile() {
         }
     };
     
-    const displayRole = getRoleName(user?.user_group_id || user?.userGroupId || 1);
+    const displayRole = getRoleName(user?.user_group_id || user?.user_group_id || 1);
 
     const triggerUpload = () => {
         fileRef.current?.click();

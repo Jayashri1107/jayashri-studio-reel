@@ -31,7 +31,7 @@ export default function InfluencerReels() {
                 // Map the data to match the expected format
                 const mapped = rows.map(r => ({
                     id: r.influencer_id,
-                    influencer: r.influencer_name || `${r.firstname || ''} ${r.lastname || ''}`.trim() || 'Unknown',
+                    influencer: r.influencer_name || `${r.first_name || r.firstname || ''} ${r.last_name || r.lastname || ''}`.trim() || 'Unknown',
                     platform: r.platform || '',
                     account: r.account_link || '',
                     influencerId: r.influencer_id,

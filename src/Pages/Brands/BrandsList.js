@@ -19,14 +19,14 @@ export default function BrandsList() {
                 id: 1,
                 name: 'Brand ABC',
                 email: 'contact@brandabc.com',
-                videoCount: 67,
+                video_count: 67,
                 status: 'active'
             },
             {
                 id: 2,
                 name: 'Brand XYZ',
                 email: 'contact@brandxyz.com',
-                videoCount: 89,
+                video_count: 89,
                 status: 'active'
             }
         ]);
@@ -99,7 +99,7 @@ export default function BrandsList() {
                                             <td>{brand.name}</td>
                                             <td>{brand.email}</td>
                                             <td>
-                                                <span className="badge bg-warning">{brand.videoCount}</span>
+                                                <span className="badge bg-warning">{brand.video_count || brand.videoCount}</span>
                                             </td>
                                             <td>
                                                 <span className={`badge ${brand.status === 'active' ? 'bg-success' : 'bg-danger'}`}>

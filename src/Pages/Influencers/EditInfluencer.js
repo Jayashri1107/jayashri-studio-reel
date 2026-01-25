@@ -47,8 +47,8 @@ export default function EditInfluencer() {
                 });
                 
                 setInfluencerData({
-                    firstname: influencer.firstname || '',
-                    lastname: influencer.lastname || '',
+                    firstname: influencer.first_name || influencer.firstname || '',
+                    lastname: influencer.last_name || influencer.lastname || '',
                     email: influencer.email || '',
                     telephone: influencer.telephone || '',
                     platform: influencer.platform || '',
@@ -168,8 +168,8 @@ export default function EditInfluencer() {
             // Update influencer via API using InfluencerService
             const response = await InfluencerService.updateInfluencer(id, {
                 status: statusInt,
-                firstname: influencerData.firstname.trim(),
-                lastname: influencerData.lastname.trim(),
+                first_name: influencerData.firstname.trim(),
+                last_name: influencerData.lastname.trim(),
                 email: influencerData.email.trim(),
                 telephone: influencerData.telephone?.trim() || null,
                 platform: influencerData.platform || null,

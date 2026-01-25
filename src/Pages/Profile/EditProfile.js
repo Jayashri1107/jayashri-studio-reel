@@ -36,14 +36,14 @@ export default function EditProfile() {
         if (resp.data?.success) {
           const u = resp.data.user;
           setProfileData({
-            firstName: u.firstName || '',
-            lastName: u.lastName || '',
+            firstName: u.first_name || u.firstName || '',
+            lastName: u.last_name || u.lastName || '',
             email: u.email || '',
             phone: u.phone || ''
           });
           setFormData({
-            firstName: u.firstName || '',
-            lastName: u.lastName || '',
+            firstName: u.first_name || u.firstName || '',
+            lastName: u.last_name || u.lastName || '',
             email: u.email || '',
             phone: u.phone || ''
           });
@@ -159,8 +159,8 @@ export default function EditProfile() {
     try {
       // Update basic info
       await api.put('/users/profile', {
-        firstName: formData.firstName.trim(),
-        lastName: formData.lastName.trim(),
+        first_name: formData.firstName.trim(),
+        last_name: formData.lastName.trim(),
         email: formData.email.trim(),
         mobile: formData.phone ? formData.phone.trim() : null
       });
@@ -183,14 +183,14 @@ export default function EditProfile() {
         localStorage.setItem('user', JSON.stringify(resp.data.user));
         window.dispatchEvent(new Event('user-updated'));
         setProfileData({
-          firstName: resp.data.user.firstName || '',
-          lastName: resp.data.user.lastName || '',
+          firstName: resp.data.user.first_name || resp.data.user.firstName || '',
+          lastName: resp.data.user.last_name || resp.data.user.lastName || '',
           email: resp.data.user.email || '',
           phone: resp.data.user.phone || ''
         });
         setFormData({
-          firstName: resp.data.user.firstName || '',
-          lastName: resp.data.user.lastName || '',
+          firstName: resp.data.user.first_name || resp.data.user.firstName || '',
+          lastName: resp.data.user.last_name || resp.data.user.lastName || '',
           email: resp.data.user.email || '',
           phone: resp.data.user.phone || ''
         });

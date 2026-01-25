@@ -14,18 +14,18 @@ export default function PendingApprovals() {
                 id: 1,
                 title: 'Product Demo #123',
                 type: 'seller',
-                productBrand: 'Product ABC',
-                uploadedBy: 'Seller 1',
-                uploadedAt: '2024-01-15',
+                product_brand: 'Product ABC',
+                uploaded_by: 'Seller 1',
+                uploaded_at: '2024-01-15',
                 thumbnail: '/assets/images/users/avatar-1.jpg'
             },
             {
                 id: 2,
                 title: 'Brand Campaign #456',
                 type: 'brand',
-                productBrand: 'Brand XYZ',
-                uploadedBy: 'Brand Manager',
-                uploadedAt: '2024-01-14',
+                product_brand: 'Brand XYZ',
+                uploaded_by: 'Brand Manager',
+                uploaded_at: '2024-01-14',
                 thumbnail: '/assets/images/users/avatar-2.jpg'
             }
         ]);
@@ -90,9 +90,9 @@ export default function PendingApprovals() {
                                                         {video.type.charAt(0).toUpperCase() + video.type.slice(1)}
                                                     </span>
                                                 </td>
-                                                <td>{video.productBrand}</td>
-                                                <td>{video.uploadedBy}</td>
-                                                <td>{video.uploadedAt}</td>
+                                                <td>{video.product_brand || video.productBrand}</td>
+                                                <td>{video.uploaded_by || video.uploadedBy}</td>
+                                                <td>{video.uploaded_at || video.uploadedAt}</td>
                                                 <td>
                                                     <Link 
                                                         to={`/videos/approval/${video.id}`} 

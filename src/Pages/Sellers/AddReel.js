@@ -588,34 +588,34 @@ export default function AddReel() {
             formDataObj.append('title', cleanedTitle);
             formDataObj.append('description', formData.description || '');
             formDataObj.append('category', formData.category);
-            formDataObj.append('associationType', formData.associatedWith);
+            formDataObj.append('association_type', formData.associatedWith);
             
             // Append other category name if category is "other"
             if (formData.category === 'other' && newCategoryName.trim()) {
-                formDataObj.append('otherCategoryName', newCategoryName.trim());
+                formDataObj.append('other_category_name', newCategoryName.trim());
             }
             
             // Append seller or brand based on association type
             // Note: seller is required for both product and brand associations (database constraint)
             if (formData.associatedWith === 'product') {
-                formDataObj.append('selectedSeller', formData.seller);
+                formDataObj.append('selected_seller', formData.seller);
                 // Append multiple products
                 if (formData.selectedProducts && formData.selectedProducts.length > 0) {
                     formData.selectedProducts.forEach(productId => {
-                        formDataObj.append('selectedProducts', parseInt(productId));
+                        formDataObj.append('selected_products', parseInt(productId));
                     });
                 }
             } else if (formData.associatedWith === 'brand') {
                 // For brand associations, still send seller if available
                 // If seller is not selected, we'll need to handle it on backend
                 if (formData.seller) {
-                    formDataObj.append('selectedSeller', formData.seller);
+                    formDataObj.append('selected_seller', formData.seller);
                 }
-                formDataObj.append('selectedBrand', formData.selectedBrand);
+                formDataObj.append('selected_brand', formData.selectedBrand);
                 // Append multiple products
                 if (formData.selectedProducts && formData.selectedProducts.length > 0) {
                     formData.selectedProducts.forEach(productId => {
-                        formDataObj.append('selectedProducts', parseInt(productId));
+                        formDataObj.append('selected_products', parseInt(productId));
                     });
                 }
             }
@@ -631,7 +631,7 @@ export default function AddReel() {
             
             // Append video duration if available
             if (formData.videoDuration) {
-                formDataObj.append('videoDuration', String(formData.videoDuration));
+                formDataObj.append('video_duration', String(formData.videoDuration));
             }
             
             // Append thumbnail if selected
@@ -708,7 +708,7 @@ export default function AddReel() {
                                                 <option value="">Select a Seller</option>
                                                 {sellers.map(seller => {
                                                     const id = seller.vendor_id ?? seller.id;
-                                                    const name = seller.name ?? `${seller.firstname || ''} ${seller.lastname || ''}`.trim();
+                                                    const name = seller.name ?? `${seller.first_name || seller.firstName || seller.firstname || ''} ${seller.last_name || seller.lastName || seller.lastname || ''}`.trim();
                                                     return (
                                                         <option key={id} value={id}>
                                                             {name || `Seller #${id}`}
